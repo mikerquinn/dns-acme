@@ -711,10 +711,6 @@ func main() {
 func buildPlugin(logger hclog.Logger) *Plugin {
 	impl := NewPlugin(logger)
 
-	// Use in-memory storage for testing
-	backend := storage.NewMemoryStorage()
-	impl.Init(context.Background(), backend)
-
 	// Register the lego provider factory under all known lego provider names.
 	// This allows any lego-supported DNS provider (cloudflare, route53, etc.)
 	// to be used by referencing the provider name in the role config.

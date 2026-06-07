@@ -13,3 +13,12 @@ type StorageBackend interface {
 	Delete(ctx context.Context, key string) error
 	List(ctx context.Context, prefix string) ([]string, error)
 }
+
+// NotFoundError is returned when a key is not found in storage.
+type NotFoundError struct {
+	Key string
+}
+
+func (e *NotFoundError) Error() string {
+	return "key not found: " + e.Key
+}
