@@ -70,7 +70,6 @@ func (p *Plugin) Init(ctx context.Context, backend storage.StorageBackend) {
 	}
 	p.configStore = storage.NewConfigStorage(backend)
 	p.enrollStore = enroll.NewEnrollmentStorage(backend)
-	f, _ := os.Create("/tmp/plugin_debug.log"); if f != nil { fmt.Fprintf(f, "DEBUG Init complete: configStore=%v enrollStore=%v\n", p.configStore != nil, p.enrollStore != nil); f.Close() }
 
 	// Try to load ACME account from storage
 	account, err := p.configStore.GetACMEAccount(ctx)
