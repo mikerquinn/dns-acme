@@ -161,8 +161,9 @@ role wins — register narrower zones before broader ones to override.
 Enrolls a CSR for certificate issuance. The CSR is parsed to extract
 domain names from its Subject Alternative Name (SAN) extension (or Common Name
 fallback). Each domain is matched against configured role zones — the first role
-whose zone equals the domain or is a parent of it wins. The DNS-01 challenge is
-initiated asynchronously.
+whose zone equals the domain or is a parent of it wins. If no matching role is
+found, enrollment fails immediately with an error. If a role is found, the DNS-01
+challenge is initiated asynchronously.
 
 | Parameter | Type | Description |
 |---|---|---|
@@ -172,11 +173,12 @@ initiated asynchronously.
 
 | Output Field | Type | Description |
 |---|---|---|
-| **id** | string | Enrollment identifier (hex string) |
-| **state** | string | `pending` — DNS-01 challenge is in progress |
+| **id** | string | Enrollment identifier (hex string) — present only on success |
+| **state** | string | `pending` — DNS-01 challenge is in progress — present only on success |
 | **domains** | []string | List of domains from the CSR |
-| **message** | string | Human-readable status |
-| **retrieve_url** | string | URL to poll for completion |
+| **message** | string | Human-readable status — present only on success |
+| **retrieve_url** | string | URL to poll for completion — present only on success |
+| **error** | string | Error message — present when no matching role is found for the requested domains |
 
 Entity authorization is applied when the request includes entity headers
 (`X-Entity-Id`, `X-Entity-Metadata`, `X-Entity-Domain`). Authorization is
@@ -309,12 +311,13 @@ The certificate issuance flow is asynchronous:
 1. Entity sends CSR via `enroll/new`
 2. Plugin extracts domain names from the CSR's SAN/CN
 3. Each domain is matched against configured role zones (domain equals zone or is a subdomain)
-4. The first matching role determines the DNS provider and credentials
-5. DNS-01 challenge is initiated via the matched provider
-6. Plugin returns immediately with enrollment ID and pending state
-7. Plugin polls the CA until the challenge is complete
-8. Plugin stores the issued certificate
-9. Entity polls `enroll/retrieve/<ID>` until state is `completed`
+4. If no matching role is found, the request fails immediately with an error
+5. The first matching role determines the DNS provider and credentials
+6. DNS-01 challenge is initiated via the matched provider
+7. Plugin returns immediately with enrollment ID and pending state
+8. Plugin polls the CA until the challenge is complete
+9. Plugin stores the issued certificate
+10. Entity polls `enroll/retrieve/<ID>` until state is `completed`
 
 Typical total time: 30–120 seconds depending on DNS propagation and CA
 processing speed.
@@ -543,8 +546,17 @@ provisioning with role-based domain authorization.
 The plugin uses the go-acme/lego library for ACME protocol support and
 DNS-01 challenge resolution across 100+ DNS providers.
 
+## VERSION HISTORY
+
+### v1.0.1 — June 7, 2026
+
+- Immediate error on `enroll/new` when no matching role is found (previously created a `pending` enrollment that errored on polling)
+- Improved error messages for no-matching-role and unknown-provider cases
+
+### v1.0 — June 7, 2026
+
+Initial release.
+
 ## VERSION
 
-This document describes version 1.0 of the dns-acme plugin for OpenBao.
-
-June 7, 2026
+This document describes version 1.0.1 of the dns-acme plugin for OpenBao.
