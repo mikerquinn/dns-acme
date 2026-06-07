@@ -108,36 +108,30 @@ func (f *LegoProviderFactory) NewProvider(config map[string]interface{}) (Provid
 		return nil, fmt.Errorf("config must contain 'provider' field with the lego DNS provider name")
 	}
 
-	// Collect env vars from config
+	// Collect env vars from config.
+	// Config keys containing an underscore are used directly as env var names
+	// (e.g. "CLOUDFLARE_DNS_API_TOKEN", "aws_access_key_id"), letting role
+	// admins specify exactly the env vars lego expects.
+	// Keys without an underscore are prefixed with the uppercase provider name
+	// and uppercased (e.g. "api_token" -> "CLOUDFLARE_API_TOKEN").
 	type envPair struct {
 		key   string
 		value string
 	}
 	var envVars []envPair
 
-	// Map of provider names to their env var prefix
-	providerPrefixes := map[string]string{
-		"cloudflare": "CLOUDFLARE",
-		"route53":    "AWS",
-		"azuredns":   "AZURE",
-		"gcloud":     "GOOGLE",
-		"digitalocean": "DIGITALOCEAN",
-		"linode":     "LINODE",
-		"namedotcom": "NAMECOM",
-		"rfc2136":    "RFC2136",
-	}
-	prefix, ok := providerPrefixes[providerName]
-	if !ok {
-		prefix = strings.ToUpper(providerName) // fallback: uppercase provider name
-	}
-
 	for k, v := range config {
 		if k == "provider" {
 			continue
 		}
 		if strVal, ok := v.(string); ok && strVal != "" {
-			// Prefix env var with provider name for lego compatibility
-			envVars = append(envVars, envPair{prefix + "_" + strings.ToUpper(k), strVal})
+			var envName string
+			if strings.Contains(k, "_") {
+				envName = k
+			} else {
+				envName = strings.ToUpper(providerName) + "_" + strings.ToUpper(k)
+			}
+			envVars = append(envVars, envPair{envName, strVal})
 		}
 	}
 
