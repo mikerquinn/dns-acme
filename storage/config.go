@@ -25,6 +25,7 @@ type DNSRole struct {
 	Provider     string                 `json:"provider"`      // Lego provider name
 	Credentials  map[string]interface{} `json:"credentials"`   // Provider-specific credentials
 	AllowedNames string                 `json:"allowed_names"` // Glob pattern for allowed domain names
+	Zone         string                 `json:"zone"`          // DNS zone identifier (e.g., Cloudflare zone ID, Route53 hosted zone)
 }
 
 // ConfigStorage wraps StorageBackend with configuration-specific methods.

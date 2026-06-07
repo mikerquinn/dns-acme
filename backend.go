@@ -368,6 +368,7 @@ func (b *dnsacmeBackend) handleSetRoleData(name string, data map[string]interfac
 
 	provider, _ := data["provider"].(string)
 	allowedNames, _ := data["allowed_names"].(string)
+	zone, _ := data["zone"].(string)
 
 	if provider == "" || allowedNames == "" {
 		return &logical.Response{Data: map[string]interface{}{"error": "provider and allowed_names are required"}}, nil
@@ -381,7 +382,7 @@ func (b *dnsacmeBackend) handleSetRoleData(name string, data map[string]interfac
 	credentials := make(map[string]interface{})
 	for k, v := range data {
 		switch k {
-		case "provider", "allowed_names", "_",
+		case "provider", "allowed_names", "zone", "_",
 			"_wrap_ttl", "wrap_info", "wrap_ttl", "token_lookup", "token_policies", "token_no_default_policy",
 			"lease_options", "metadata", "data":
 		default:
@@ -389,7 +390,7 @@ func (b *dnsacmeBackend) handleSetRoleData(name string, data map[string]interfac
 		}
 	}
 
-	role := &storage.DNSRole{Name: name, Provider: provider, Credentials: credentials, AllowedNames: allowedNames}
+	role := &storage.DNSRole{Name: name, Provider: provider, Credentials: credentials, AllowedNames: allowedNames, Zone: zone}
 	if err := b.configStore.SetRole(context.Background(), role); err != nil {
 		return &logical.Response{Data: map[string]interface{}{"error": "failed to store role: " + err.Error()}}, nil
 	}

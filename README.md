@@ -122,6 +122,7 @@ name and credential set to a glob pattern of allowed domain names.
 |---|---|---|
 | **provider** | string | DNS provider name (e.g. `cloudflare`, `route53`, `gandi`). Any provider supported by go-acme/lego is valid. |
 | **allowed_names** | string | Comma-separated domain names or glob patterns. Wildcards: `*.example.com` matches `foo.example.com` but not `example.com`. |
+| **zone** | string | (Optional) DNS zone identifier (e.g. Cloudflare zone ID, Route53 hosted zone ID). Passed to lego as the `ZONE` env var — providers that need explicit zone info will use it, others ignore it. |
 | **`<CREDENTIALS>`** | map | One or more provider-specific credential keys. See [Provider Credential Mapping](#provider-credential-mapping). |
 
 | Output Field | Type | Description |
@@ -134,6 +135,7 @@ name and credential set to a glob pattern of allowed domain names.
 bao write dnsplugin/config/roles/cloudflare \
     provider=cloudflare \
     allowed_names="example.com,*.example.com" \
+    zone=abc123def456 \
     CLOUDFLARE_DNS_API_TOKEN=cfut_mQ40...
 ```
 
@@ -141,6 +143,7 @@ bao write dnsplugin/config/roles/cloudflare \
 bao write dnsplugin/config/roles/route53 \
     provider=route53 \
     allowed_names="staging.example.com" \
+    zone=Z1234567890ABC \
     AWS_ACCESS_KEY_ID=AKIA... \
     AWS_SECRET_ACCESS_KEY=wJalr...
 ```
@@ -241,6 +244,17 @@ bao write dnsplugin/config/create \
     acme_email=certificates@example.com \
     acme_url=https://acme-staging-v02.api.letsencrypt.org/directory
 ```
+
+### Provider Zone Attribute
+
+The optional `zone` attribute on a role lets you specify the DNS zone that the
+API key has access to. This is passed to lego as the `ZONE` environment variable
+(also as `{PROVIDER}_ZONE`, e.g. `ROUTE53_ZONE`). Providers that need explicit
+zone identification (Route53's `AWS_HOSTED_ZONE_ID`, etc.) will pick it up; most
+providers resolve the zone from the domain automatically and ignore it.
+
+This is **not** a permissions mechanism — the entity's `allowed_domains` metadata
+attribute is the only authorization check.
 
 ### Provider Credential Mapping
 

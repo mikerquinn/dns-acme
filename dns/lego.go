@@ -99,6 +99,8 @@ type LegoProviderFactory struct{}
 // The config map should contain:
 //
 //	"provider": the lego DNS provider name (e.g., "cloudflare", "route53", "digitalocean")
+//	"zone": (optional) DNS zone identifier (e.g. Cloudflare zone ID, Route53 hosted zone).
+//          Set as the "ZONE" env var, which providers that need explicit zone info will use.
 //
 // Any other string-valued keys are converted to environment variables:
 //
@@ -126,8 +128,16 @@ func (f *LegoProviderFactory) NewProvider(config map[string]interface{}) (Provid
 	}
 	var envVars []envPair
 
+	// Set ZONE env var from the role's zone attribute if provided.
+	// Providers that need explicit zone identification (e.g. Route53 with AWS_HOSTED_ZONE_ID)
+	// will pick up the zone; others will ignore it.
+	if zone, ok := config["zone"].(string); ok && zone != "" {
+		envVars = append(envVars, envPair{"ZONE", zone})
+		envVars = append(envVars, envPair{strings.ToUpper(providerName) + "_ZONE", zone})
+	}
+
 	for k, v := range config {
-		if k == "provider" {
+		if k == "provider" || k == "zone" {
 			continue
 		}
 		if strVal, ok := v.(string); ok && strVal != "" {
