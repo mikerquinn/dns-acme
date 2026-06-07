@@ -2,6 +2,7 @@
 
 ## NAME
 
+
 **dnsacme-policy** — OpenBao DNS-01 ACME certificate issuance plugin with role-based domain authorization
 
 ## DESCRIPTION
