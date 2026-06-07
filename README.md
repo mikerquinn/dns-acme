@@ -29,21 +29,21 @@ until the certificate is issued.
 ### Enable the Plugin
 
 ```
-$ bao secrets enable -path=dnsplugin -plugin-name=dnsacme-plugin plugin
+  bao secrets enable -path=dnsplugin -plugin-name=dnsacme-plugin plugin
 ```
 
 The plugin binary must be registered in the OpenBao plugin catalog before
 enabling:
 
 ```
-$ bao plugin register -sha256=<SHA256> secret dnsacme-plugin
-$ bao secrets enable -path=dnsplugin -plugin-name=dnsacme-plugin plugin
+  bao plugin register -sha256=<SHA256> secret dnsacme-plugin
+  bao secrets enable -path=dnsplugin -plugin-name=dnsacme-plugin plugin
 ```
 
 ### Enable TLS Verification
 
 ```
-$ bao secrets enable -tls-required=true -path=dnsplugin -plugin-name=dnsacme-plugin plugin
+  bao secrets enable -tls-required=true -path=dnsplugin -plugin-name=dnsacme-plugin plugin
 ```
 
 ## API PATHS
@@ -70,7 +70,7 @@ Creates an ACME account with a generated RSA-2048 keypair and registers it
 with the ACME CA. Returns the account URI.
 
 ```
-$ bao write dnsplugin/config/create acme_email=<EMAIL> acme_url=<URL>
+  bao write dnsplugin/config/create acme_email=<EMAIL> acme_url=<URL>
 ```
 
 | Input Field | Description |
@@ -90,7 +90,7 @@ $ bao write dnsplugin/config/create acme_email=<EMAIL> acme_url=<URL>
 Retrieves the current ACME account configuration (email only).
 
 ```
-$ bao read dnsplugin/config
+  bao read dnsplugin/config
 ```
 
 ### `dnsplugin/config/roles`
@@ -98,7 +98,7 @@ $ bao read dnsplugin/config
 Lists all configured DNS provider roles.
 
 ```
-$ bao read dnsplugin/config/roles
+  bao read dnsplugin/config/roles
 ```
 
 ### `dnsplugin/config/roles/<ROLE>`
@@ -108,13 +108,13 @@ name and credential set to a glob pattern of allowed domain names.
 
 ```
 # Create or update
-$ bao write dnsplugin/config/roles/<ROLE> provider=<PROVIDER> allowed_names=<NAMES> <CREDENTIALS>
+  bao write dnsplugin/config/roles/<ROLE> provider=<PROVIDER> allowed_names=<NAMES> <CREDENTIALS>
 
 # Read
-$ bao read dnsplugin/config/roles/<ROLE>
+  bao read dnsplugin/config/roles/<ROLE>
 
 # Delete
-$ bao delete dnsplugin/config/roles/<ROLE>
+  bao delete dnsplugin/config/roles/<ROLE>
 ```
 
 | Input Field | Description |
@@ -137,7 +137,7 @@ patterns to determine the DNS provider, and the DNS-01 challenge is initiated
 asynchronously.
 
 ```
-$ bao write dnsplugin/enroll/new csr=<BASE64_CSR>
+  bao write dnsplugin/enroll/new csr=<BASE64_CSR>
 ```
 
 | Input Field | Description |
@@ -167,7 +167,7 @@ Polls the status of an enrollment. Returns `pending`, `in_progress`,
 certificate bundle is included.
 
 ```
-$ bao read dnsplugin/enroll/retrieve/<ID>
+  bao read dnsplugin/enroll/retrieve/<ID>
 ```
 
 | State | Output Fields |
@@ -182,7 +182,7 @@ $ bao read dnsplugin/enroll/retrieve/<ID>
 Polls enrollment status with the ID passed in the request body.
 
 ```
-$ bao write dnsplugin/enroll/retrieve id=<ID>
+  bao write dnsplugin/enroll/retrieve id=<ID>
 ```
 
 ### `dnsplugin/revoke`
@@ -190,8 +190,8 @@ $ bao write dnsplugin/enroll/retrieve id=<ID>
 Revokes a certificate by sending a revoke request to the ACME CA.
 
 ```
-$ bao write dnsplugin/revoke certificate=<CERT_PEM>
-$ bao write dnsplugin/revoke id=<ENROLLMENT_ID>
+  bao write dnsplugin/revoke certificate=<CERT_PEM>
+  bao write dnsplugin/revoke id=<ENROLLMENT_ID>
 ```
 
 | Input Field | Description |
@@ -214,7 +214,7 @@ plugin is restarted (e.g. OpenBao dev container with inmem storage), the
 account must be recreated.
 
 ```
-$ bao write dnsplugin/config/create \
+  bao write dnsplugin/config/create \
     acme_email=certificates@example.com \
     acme_url=https://acme-staging-v02.api.letsencrypt.org/directory
 ```
@@ -226,14 +226,14 @@ to a glob pattern of allowed names. The plugin iterates all roles and finds
 the first match against the CSR domains to determine which provider to use.
 
 ```
-$ bao write dnsplugin/config/roles/cloudflare-main \
+  bao write dnsplugin/config/roles/cloudflare-main \
     provider=cloudflare \
     allowed_names="example.com,*.example.com" \
     CLOUDFLARE_DNS_API_TOKEN=cfut_mQ40...
 ```
 
 ```
-$ bao write dnsplugin/config/roles/route53-staging \
+  bao write dnsplugin/config/roles/route53-staging \
     provider=route53 \
     allowed_names="staging.example.com" \
     AWS_ACCESS_KEY_ID=AKIA... \
@@ -316,25 +316,25 @@ openssl req -new -newkey rsa:2048 -nodes \
   -addext "subjectAltName=DNS:www.example.com,DNS:mail.example.com"
 
 # 2. Create an ACME account
-$ bao write dnsplugin/config/create \
+  bao write dnsplugin/config/create \
     acme_email=certs@example.com \
     acme_url=https://acme-staging-v02.api.letsencrypt.org/directory
 
 # 3. Create a DNS role
-$ bao write dnsplugin/config/roles/cloudflare \
+  bao write dnsplugin/config/roles/cloudflare \
     provider=cloudflare \
     allowed_names="example.com,*.example.com" \
     CLOUDFLARE_DNS_API_TOKEN=cfut_mQ40...
 
 # 4. Enroll the CSR
-$ CSR=$(base64 -w 0 /tmp/server.csr)
-$ bao write dnsplugin/enroll/new csr="$CSR"
+  CSR=$(base64 -w 0 /tmp/server.csr)
+  bao write dnsplugin/enroll/new csr="$CSR"
 
 # 5. Poll for completion (repeat until state is "completed")
-$ bao read dnsplugin/enroll/retrieve/<ID>
+  bao read dnsplugin/enroll/retrieve/<ID>
 
 # 6. On completion, extract the certificate
-$ bao read dnsplugin/enroll/retrieve/<ID> -format=json |
+  bao read dnsplugin/enroll/retrieve/<ID> -format=json |
   python3 -c "import json,sys; print(json.load(sys.stdin)['data']['certificate'])" \
   > /tmp/server.crt
 ```
@@ -344,20 +344,20 @@ $ bao read dnsplugin/enroll/retrieve/<ID> -format=json |
 Renewal uses the same enrollment flow with the same CSR (or a new one):
 
 ```bash
-$ bao write dnsplugin/enroll/new csr="$CSR"
+  bao write dnsplugin/enroll/new csr="$CSR"
 # Returns same enrollment ID; plugin re-issues the certificate
 # (new not_after timestamp)
-$ bao read dnsplugin/enroll/retrieve/<ID>
+  bao read dnsplugin/enroll/retrieve/<ID>
 ```
 
 ### Revocation
 
 ```bash
 # Revoke by certificate
-$ bao write dnsplugin/revoke certificate="$(cat /tmp/server.crt)"
+  bao write dnsplugin/revoke certificate="$(cat /tmp/server.crt)"
 
 # Or cancel a pending enrollment
-$ bao write dnsplugin/revoke id=<ID>
+  bao write dnsplugin/revoke id=<ID>
 ```
 
 ## STORAGE KEYS
@@ -473,11 +473,11 @@ attribute to an entity or token:
 
 ```bash
 # Set allowed_domains on an entity
-$ bao write auth/token/accessor/<ACCESSOR> \
+  bao write auth/token/accessor/<ACCESSOR> \
     metadata=allowed_domains=example.com,*.example.com
 
 # Or create a token with allowed_domains
-$ bao write auth/token/create \
+  bao write auth/token/create \
     policies=issuer \
     metadata=allowed_domains=staging.example.com
 ```
