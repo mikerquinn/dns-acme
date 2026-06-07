@@ -367,11 +367,10 @@ func (b *dnsacmeBackend) handleSetRoleData(name string, data map[string]interfac
 	}
 
 	provider, _ := data["provider"].(string)
-	allowedNames, _ := data["allowed_names"].(string)
 	zone, _ := data["zone"].(string)
 
-	if provider == "" || allowedNames == "" {
-		return &logical.Response{Data: map[string]interface{}{"error": "provider and allowed_names are required"}}, nil
+	if provider == "" || zone == "" {
+		return &logical.Response{Data: map[string]interface{}{"error": "provider and zone are required"}}, nil
 	}
 
 	if err := b.registry.ValidateProvider(provider); err != nil {
@@ -390,7 +389,7 @@ func (b *dnsacmeBackend) handleSetRoleData(name string, data map[string]interfac
 		}
 	}
 
-	role := &storage.DNSRole{Name: name, Provider: provider, Credentials: credentials, AllowedNames: allowedNames, Zone: zone}
+	role := &storage.DNSRole{Name: name, Provider: provider, Credentials: credentials, Zone: zone}
 	if err := b.configStore.SetRole(context.Background(), role); err != nil {
 		return &logical.Response{Data: map[string]interface{}{"error": "failed to store role: " + err.Error()}}, nil
 	}
@@ -438,7 +437,7 @@ func (b *dnsacmeBackend) handleEnrollData(r *http.Request, data map[string]inter
 		}
 	}
 
-	// Find matching role and set provider/credentials
+	// Find matching role by checking if the domain falls within the role's zone
 	var matchedProvider string
 	var matchedCredentials map[string]interface{}
 	roles, _ := b.configStore.ListRoles(context.Background())
@@ -448,7 +447,7 @@ func (b *dnsacmeBackend) handleEnrollData(r *http.Request, data map[string]inter
 			continue
 		}
 		for _, domainName := range csrInfo.Domains {
-			if matchGlob(role.AllowedNames, domainName) {
+			if zoneMatchesDomain(domainName, role.Zone) {
 				matchedProvider = role.Provider
 				matchedCredentials = role.Credentials
 				break
@@ -622,8 +621,8 @@ func (b *dnsacmeBackend) validateEntityAuthorization(domain string, metadata map
 				b.logger.Warn("could not get role", "name", roleName, "error", err)
 				continue
 			}
-			b.logger.Info("checking role", "role", roleName, "allowed", role.AllowedNames, "domain", requested)
-			if matchGlob(role.AllowedNames, requested) {
+			b.logger.Info("checking role", "role", roleName, "zone", role.Zone, "domain", requested)
+			if zoneMatchesDomain(requested, role.Zone) {
 				matched = true
 				b.logger.Info("matched", "role", roleName)
 				break
@@ -631,7 +630,7 @@ func (b *dnsacmeBackend) validateEntityAuthorization(domain string, metadata map
 		}
 
 		if !matched {
-			return fmt.Errorf("domain %q does not match any DNS provider role allowed_names", requested)
+			return fmt.Errorf("domain %q does not fall within any DNS provider role zone", requested)
 		}
 	}
 
@@ -667,30 +666,16 @@ func parseKey(data []byte) (crypto.PrivateKey, error) {
 	}
 }
 
-// matchGlob checks if a domain matches a glob pattern (supports * wildcard and comma-separated patterns).
-func matchGlob(pattern, domain string) bool {
+// zoneMatchesDomain checks if a domain falls within a DNS zone.
+// Returns true if domain == zone, or domain ends with ".zone" (subdomain match).
+func zoneMatchesDomain(domain, zone string) bool {
 	domain = strings.ToLower(domain)
-
-	// Split on comma for comma-separated patterns
-	parts := strings.Split(pattern, ",")
-	for _, p := range parts {
-		p = strings.TrimSpace(strings.ToLower(p))
-		if p == domain {
-			return true
-		}
-		// Handle wildcard patterns: *.example.com
-		if strings.HasPrefix(p, "*.") {
-			suffix := p[1:] // e.g. ".example.com"
-			if strings.HasSuffix(domain, suffix) {
-				prefix := domain[:len(domain)-len(suffix)]
-				// suffix includes the leading dot, so prefix must be non-empty
-				// to ensure it's a real subdomain (e.g. "sub" not "")
-				if prefix != "" {
-					return true
-				}
-			}
-		}
+	zone = strings.ToLower(zone)
+	if domain == zone {
+		return true
 	}
-
+	if strings.HasSuffix(domain, "."+zone) {
+		return true
+	}
 	return false
 }
