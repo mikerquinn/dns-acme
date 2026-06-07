@@ -2,7 +2,6 @@
 
 ## NAME
 
-
 **dns-acme** — OpenBao DNS-01 ACME certificate issuance plugin with role-based domain authorization
 
 ## DESCRIPTION
@@ -13,11 +12,11 @@ DNS-01 challenge mechanism.
 
 Most DNS providers only offer zone-level or account-level API tokens that allow
 DNS record creation for any name within the zone. This plugin adds a role-based
-authorization layer: a role maps a DNS provider credential to a glob pattern of
-allowed domain names. An entity that requests a certificate via a CSR must have
-the requesting domain authorized either by the role's **allowed_names** or by
-the entity's **allowed_domains** metadata attribute. This prevents a server
-from enrolling for arbitrary names in the zone.
+authorization layer: a role maps a DNS provider credential to a DNS zone. An
+entity that requests a certificate via a CSR must have the requesting domain
+authorized either by the role's **zone** (the domain must equal the zone or be a
+subdomain of it) or by the entity's **allowed_domains** metadata attribute. This
+prevents a server from enrolling for arbitrary names in the zone.
 
 The plugin maintains its own internal storage for DNS role credentials and
 ACME account state. The issuer runs asynchronously: enrollment requests return
@@ -30,7 +29,7 @@ until the certificate is issued.
 
 **bao write** **<PATH>/config/create** `acme_email=`**`<EMAIL>`** `acme_url=`**`<URL>`**
 
-**bao write** **<PATH>/config/roles/**`<NAME>`** `provider=`**`<PROVIDER>`** `allowed_names=`**`<NAMES>`** `...`**`<CREDENTIALS>`**
+**bao write** **<PATH>/config/roles/**`<NAME>`** `provider=`**`<PROVIDER>`** `zone=`**`<ZONE>`** `...`**`<CREDENTIALS>`**
 
 **bao write** **<PATH>/enroll/new** `csr=`**`<CSR>`**
 
@@ -63,7 +62,7 @@ The following paths are available on the mounted secrets engine:
 |---|---|---|
 | **<PATH>/config/create** | `bao write` | Create ACME account with generated RSA-2048 key |
 | **<PATH>/config** | `bao read` | Read current ACME account email |
-| **<PATH>/config/roles** | `bao read` | List configured DNS roles |
+| **<PATH>/config/roles** | `bao list`/`bao read` | List configured DNS roles |
 | **<PATH>/config/roles/**`<NAME>`** | `bao write`/`bao read`/`bao delete` | Create, read, or delete a DNS role |
 | **<PATH>/enroll/new** | `bao write` | Enroll a CSR for certificate issuance |
 | **<PATH>/enroll/retrieve/**`<ID>`** | `bao read` | Poll enrollment status and retrieve certificate |
@@ -82,7 +81,7 @@ with the ACME CA.
 
 | Parameter | Type | Description |
 |---|---|---|
-| **acme_email** | string | ACME account email address (optional; CA may require it) |
+| **email** / **acme_email** | string | ACME account email address (required; CA may require it) |
 | **acme_url** | string | ACME directory URL (defaults to Let's Encrypt production) |
 
 | Output Field | Type | Description |
@@ -121,7 +120,7 @@ name, credential set, and DNS zone to a set of credentials.
 | Parameter | Type | Description |
 |---|---|---|
 | **provider** | string | DNS provider name (e.g. `cloudflare`, `route53`, `gandi`). Any provider supported by go-acme/lego is valid. |
-| **zone** | string | DNS zone the API key controls (e.g. `example.com`, `staging.example.com`). The API key must have permissions for this zone and all subdomains. Passed to lego as the `ZONE` env var. |
+| **zone** | string | DNS zone the API key controls (e.g. `example.com`, `staging.example.com`). Required. The API key must have permissions for this zone and all subdomains. Passed to lego as the `ZONE` and `{PROVIDER}_ZONE` env vars. |
 | **`<CREDENTIALS>`** | map | One or more provider-specific credential keys. See [Provider Credential Mapping](#provider-credential-mapping). |
 
 | Output Field | Type | Description |
@@ -134,7 +133,6 @@ name, credential set, and DNS zone to a set of credentials.
 bao write dnsplugin/config/roles/cloudflare \
     provider=cloudflare \
     zone=example.com \
-    zone_id=abc123def456 \
     CLOUDFLARE_DNS_API_TOKEN=cfut_mQ40...
 ```
 
@@ -142,13 +140,12 @@ bao write dnsplugin/config/roles/cloudflare \
 bao write dnsplugin/config/roles/route53 \
     provider=route53 \
     zone=staging.example.com \
-    zone_id=Z1234567890ABC \
     AWS_ACCESS_KEY_ID=AKIA... \
     AWS_SECRET_ACCESS_KEY=wJalr...
 ```
 
-Multiple roles can cover overlapping domains. The first match wins. Use
-narrower patterns in earlier-registered roles to override broader ones.
+Multiple roles can cover overlapping zones. During enrollment the first matching
+role wins — register narrower zones before broader ones to override.
 
 ### config/roles/**`<NAME>`**
 
@@ -162,16 +159,16 @@ narrower patterns in earlier-registered roles to override broader ones.
 ### enroll/new
 
 Enrolls a CSR for certificate issuance. The CSR is parsed to extract
-domain names, each domain is matched against configured role `allowed_names`
-patterns to determine the DNS provider, and the DNS-01 challenge is initiated
-asynchronously.
+domain names from its Subject Alternative Name (SAN) extension (or Common Name
+fallback). Each domain is matched against configured role zones — the first role
+whose zone equals the domain or is a parent of it wins. The DNS-01 challenge is
+initiated asynchronously.
 
 | Parameter | Type | Description |
 |---|---|---|
-| **csr** | string | CSR in PEM format, base64-encoded by the CLI |
+| **csr** | string | CSR in PEM format (auto-decoded if base64-encoded by the CLI) |
 | **acme_url** | string | Override ACME directory URL for this enrollment only |
 | **acme_email** | string | Override the ACME account email for this enrollment only |
-| **name** | string | Entity name (used for entity authorization when combined with metadata) |
 
 | Output Field | Type | Description |
 |---|---|---|
@@ -181,10 +178,11 @@ asynchronously.
 | **message** | string | Human-readable status |
 | **retrieve_url** | string | URL to poll for completion |
 
-Entity authorization is applied when the request includes a `name` field and
-`metadata` map. Authorization is checked against either the entity's
-`allowed_domains` metadata attribute or against all role `allowed_names`
-patterns. In dev CLI mode (no entity context), authorization is skipped.
+Entity authorization is applied when the request includes entity headers
+(`X-Entity-Id`, `X-Entity-Metadata`, `X-Entity-Domain`). Authorization is
+checked against either the entity's `allowed_domains` metadata attribute (exact
+match) or against all role zones (zone-hierarchy match). In dev CLI mode (no
+entity context), authorization is skipped.
 
 ### enroll/retrieve/**`<ID>`**
 
@@ -244,13 +242,20 @@ bao write dnsplugin/config/create \
     acme_url=https://acme-staging-v02.api.letsencrypt.org/directory
 ```
 
-### Zone
+### Zone-Based Role Matching
 
-The `zone` attribute specifies the DNS zone the API key controls (e.g. `example.com`). It is passed to lego as the `ZONE` and `{PROVIDER}_ZONE` environment variables — providers that need explicit zone identification (Route53's `AWS_HOSTED_ZONE_ID`, etc.) will pick it up; most providers resolve the zone from the domain automatically and ignore it.
+The `zone` attribute specifies the DNS zone the API key controls (e.g.
+`example.com`). It is passed to lego as the `ZONE` and `{PROVIDER}_ZONE`
+environment variables — providers that need explicit zone identification
+(Route53's `AWS_HOSTED_ZONE_ID`, etc.) will pick it up; most providers resolve
+the zone from the domain automatically and ignore it.
 
-During enrollment, a domain matches a role if the domain is the zone itself or a subdomain of it (e.g. zone `example.com` matches `foo.example.com`). This replaces the former `allowed_names` glob pattern mechanism.
+During enrollment, a domain matches a role if the domain equals the zone or is a
+subdomain of it (e.g. zone `example.com` matches `foo.example.com`). This
+replaces the former `allowed_names` glob pattern mechanism.
 
-The zone is **not** a permissions mechanism — the entity's `allowed_domains` metadata attribute is the only authorization check.
+The zone is **not** a permissions mechanism — the entity's `allowed_domains`
+metadata attribute is the only authorization check.
 
 ### Provider Credential Mapping
 
@@ -302,12 +307,14 @@ Only DNS names are included; IP addresses are ignored.
 The certificate issuance flow is asynchronous:
 
 1. Entity sends CSR via `enroll/new`
-2. Plugin extracts domain names, matches against role patterns
-3. DNS-01 challenge is initiated via the matched provider
-4. Plugin returns immediately with enrollment ID and pending state
-5. Plugin polls the CA until the challenge is complete
-6. Plugin stores the issued certificate
-7. Entity polls `enroll/retrieve/<ID>` until state is `completed`
+2. Plugin extracts domain names from the CSR's SAN/CN
+3. Each domain is matched against configured role zones (domain equals zone or is a subdomain)
+4. The first matching role determines the DNS provider and credentials
+5. DNS-01 challenge is initiated via the matched provider
+6. Plugin returns immediately with enrollment ID and pending state
+7. Plugin polls the CA until the challenge is complete
+8. Plugin stores the issued certificate
+9. Entity polls `enroll/retrieve/<ID>` until state is `completed`
 
 Typical total time: 30–120 seconds depending on DNS propagation and CA
 processing speed.
@@ -332,7 +339,7 @@ bao write dnsplugin/config/create \
 # 3. Create a DNS role
 bao write dnsplugin/config/roles/cloudflare \
     provider=cloudflare \
-    allowed_names="example.com,*.example.com" \
+    zone=example.com \
     CLOUDFLARE_DNS_API_TOKEN=cfut_mQ40...
 
 # 4. Enroll the CSR
@@ -375,9 +382,10 @@ The plugin stores data in the following OpenBao key paths:
 
 | Storage Key | Contents |
 |---|---|
-| `config/acme_key` | ACME account (email, private key) |
-| `config/roles/<name>` | DNS provider role |
-| `enroll/<id>` | Enrollment state (CSR, domains, status, certificate, timestamps) |
+| `config/acme_email` | ACME account email |
+| `config/acme_key` | ACME account private key (PEM) |
+| `config/roles/<name>` | DNS provider role (JSON: name, provider, zone, credentials) |
+| `enroll/<id>` | Enrollment state (JSON: CSR, domains, provider, credentials, status, certificate, timestamps) |
 
 ## ACL POLICIES
 
@@ -435,8 +443,8 @@ path "dnsplugin/revoke" {
 
 ### Issuer
 
-Limited to a subset of domains via path wildcards. This policy allows
-issuance for `*.staging.example.com` only, and read access to those
+Limited to a subset of domains via role name prefixes. This policy allows
+issuance for roles whose names start with `staging-` and read access to those
 enrollments.
 
 ```bash
@@ -492,8 +500,9 @@ bao write auth/token/create \
 ```
 
 The plugin checks entity metadata during enrollment. If `allowed_domains` is
-set, the CSR domains must be an exact match. If not set, the plugin falls
-back to checking role `allowed_names` patterns.
+set, the CSR domains must be an exact match against the listed values. If not
+set, the plugin falls back to checking role zone attributes (the domain must
+equal the zone or be a subdomain of it).
 
 ### Namespace Policies
 
