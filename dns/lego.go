@@ -92,14 +92,20 @@ func (w *legoProviderWrapper) CleanUp(ctx context.Context, domain, token, keyAut
 	return nil
 }
 
-// LegoProviderFactory creates lego-backed DNS providers from configuration maps.
-// The config map keys should match the environment variable names used by the provider.
+// LegoProviderFactory creates lego-backed DNS providers from role configuration maps.
 type LegoProviderFactory struct{}
 
 // NewProvider creates a new DNS provider using lego's built-in DNS provider registry.
 // The config map should contain:
-//   - "provider": the lego DNS provider name (e.g., "aws", "cloudflare", "route53")
-//   - Any other keys are set as environment variables for the provider
+//
+//	"provider": the lego DNS provider name (e.g., "cloudflare", "route53", "digitalocean")
+//
+// Any other string-valued keys are converted to environment variables:
+//
+//   - Keys containing an underscore are used as-is (e.g. "CLOUDFLARE_DNS_API_TOKEN").
+//     This lets admins specify the exact env var names lego expects.
+//   - Keys without an underscore are prefixed with the uppercase provider name
+//     and uppercased (e.g. "api_token" -> "CLOUDFLARE_API_TOKEN").
 //
 // This supports any DNS provider built into the lego library.
 func (f *LegoProviderFactory) NewProvider(config map[string]interface{}) (Provider, error) {
