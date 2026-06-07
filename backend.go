@@ -8,6 +8,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -274,7 +275,6 @@ func (b *dnsacmeBackend) handleCreateACMEAccountHTTP(ctx context.Context, data m
 	// Update plugin's in-memory state
 	b.acmeEmail = email
 	b.acmeKeyPEM = acmeKeyPEM
-	b.acmeKey = privateKey
 	if acmeURL != "" && acmeURL != "https://acme-v02.api.letsencrypt.org/directory" {
 		b.acmeURL = acmeURL
 	}
@@ -296,8 +296,7 @@ func (b *dnsacmeBackend) handleSetConfigData(data map[string]interface{}) (*logi
 		return &logical.Response{Data: map[string]interface{}{"error": "email and key are required"}}, nil
 	}
 
-	parsedKey, err := parseKey([]byte(key))
-	if err != nil {
+	if _, err := parseKey([]byte(key)); err != nil {
 		return &logical.Response{Data: map[string]interface{}{"error": "invalid key: " + err.Error()}}, nil
 	}
 
@@ -309,7 +308,6 @@ func (b *dnsacmeBackend) handleSetConfigData(data map[string]interface{}) (*logi
 
 	b.acmeEmail = email
 	b.acmeKeyPEM = key
-	b.acmeKey = parsedKey
 	if acmeURL != "" {
 		b.acmeURL = acmeURL
 	}
@@ -628,4 +626,61 @@ func (b *dnsacmeBackend) validateEntityAuthorization(domain string, metadata map
 	}
 
 	return nil
+}
+
+// generateID creates a random hex ID.
+func generateID() string {
+	bytes := make([]byte, 16)
+	if _, err := rand.Read(bytes); err == nil {
+		return hex.EncodeToString(bytes)
+	}
+	return fmt.Sprintf("%d", time.Now().UnixNano())
+}
+
+// parseKey parses a PEM-encoded private key.
+func parseKey(data []byte) (crypto.PrivateKey, error) {
+	block, _ := pem.Decode(data)
+	if block == nil {
+		return nil, fmt.Errorf("failed to decode PEM block")
+	}
+	switch block.Type {
+	case "RSA PRIVATE KEY":
+		return x509.ParsePKCS1PrivateKey(block.Bytes)
+	case "EC PRIVATE KEY":
+		return x509.ParsePKCS1PrivateKey(block.Bytes)
+	case "ECDSA PRIVATE KEY":
+		return x509.ParseECPrivateKey(block.Bytes)
+	case "PRIVATE KEY":
+		return x509.ParsePKCS8PrivateKey(block.Bytes)
+	default:
+		return nil, fmt.Errorf("unsupported key type: %s", block.Type)
+	}
+}
+
+// matchGlob checks if a domain matches a glob pattern (supports * wildcard and comma-separated patterns).
+func matchGlob(pattern, domain string) bool {
+	domain = strings.ToLower(domain)
+
+	// Split on comma for comma-separated patterns
+	parts := strings.Split(pattern, ",")
+	for _, p := range parts {
+		p = strings.TrimSpace(strings.ToLower(p))
+		if p == domain {
+			return true
+		}
+		// Handle wildcard patterns: *.example.com
+		if strings.HasPrefix(p, "*.") {
+			suffix := p[1:] // e.g. ".example.com"
+			if strings.HasSuffix(domain, suffix) {
+				prefix := domain[:len(domain)-len(suffix)]
+				// suffix includes the leading dot, so prefix must be non-empty
+				// to ensure it's a real subdomain (e.g. "sub" not "")
+				if prefix != "" {
+					return true
+				}
+			}
+		}
+	}
+
+	return false
 }

@@ -11,7 +11,6 @@ const (
 	configKeyACMEEmail = "config/acme_email"
 	configKeyACMEKey   = "config/acme_key"
 	configKeyRoles     = "config/roles/"
-	configKeyList      = "config/roles"
 )
 
 // ACMEAccount stores the ACME account configuration.
