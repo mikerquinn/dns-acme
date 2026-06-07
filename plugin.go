@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/go-acme/lego/v4/lego"
-	"github.com/go-acme/lego/v4/registration"
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-plugin"
 	"github.com/openbao/openbao/sdk/v2/logical"
@@ -53,14 +52,6 @@ type Plugin struct {
 
 	// Lock for ACME operations
 	mu sync.Mutex
-}
-
-// Config holds plugin configuration.
-type Config struct {
-	ACMEURL     string `json:"acme_url"`
-	ACMEEmail   string `json:"acme_email"`
-	ACMEKeyPEM  string `json:"acme_key_pem"`
-	ListenAddr  string `json:"listen_addr"`
 }
 
 // NewPlugin creates a new plugin instance.
@@ -319,7 +310,7 @@ func (p *Plugin) handleDeleteRole(w http.ResponseWriter, r *http.Request, name s
 // --- Enrollment endpoints ---
 
 func (p *Plugin) handleEnroll(w http.ResponseWriter, r *http.Request) {
-	csrPEM, acmeEmail, acmeKeyPEM, acmeURL, err := p.parseEnrollRequest(r)
+	csrPEM, _, _, acmeURL, err := p.parseEnrollRequest(r)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]interface{}{"error": err.Error()})
 		return
@@ -337,29 +328,6 @@ func (p *Plugin) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	}
 
 	p.logger.Info("enrollment requested", "domains", csrInfo.Domains)
-
-	// Get entity info
-	_, domain, entityMetadata, err := p.getEntityInfo(r)
-	if err != nil {
-		p.logger.Warn("could not get entity info (may be testing)", "error", err)
-	}
-
-	// Validate entity authorization
-	if err := p.validateEntityAuthorization(domain, entityMetadata, csrInfo.Domains); err != nil {
-		writeJSON(w, http.StatusForbidden, map[string]interface{}{"error": "entity not authorized: " + err.Error()})
-		return
-	}
-
-	// Update ACME config if provided
-	if acmeEmail != "" {
-		p.acmeEmail = acmeEmail
-	}
-	if acmeKeyPEM != "" {
-		p.acmeKeyPEM = acmeKeyPEM
-	}
-	if acmeURL != "" {
-		p.acmeURL = acmeURL
-	}
 
 	// Create enrollment
 	enrollmentID := generateID()
@@ -602,81 +570,6 @@ func (p *Plugin) handleRevoke(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// --- Entity info helpers ---
-
-func (p *Plugin) getEntityInfo(r *http.Request) (entityID, domain string, metadata map[string]string, err error) {
-	metadata = make(map[string]string)
-
-	entityID = r.Header.Get("X-Bao-Entity-Id")
-	domain = r.Header.Get("X-Bao-Entity-Domain")
-
-	if md := r.Header.Get("X-Bao-Entity-Metadata"); md != "" {
-		parts := strings.Split(md, ";")
-		for _, part := range parts {
-			kv := strings.SplitN(part, "=", 2)
-			if len(kv) == 2 {
-				metadata[strings.TrimSpace(kv[0])] = strings.TrimSpace(kv[1])
-			}
-		}
-	}
-
-	if entityID == "" {
-		return "", "", metadata, fmt.Errorf("no entity ID in request")
-	}
-
-	return
-}
-
-func (p *Plugin) validateEntityAuthorization(domain string, metadata map[string]string, domains []string) error {
-	p.logger.Info("validateEntityAuthorization", "domains", domains, "metadata", metadata, "configStore", p.configStore != nil)
-	if allowedDomains, ok := metadata["allowed_domains"]; ok && allowedDomains != "" {
-		allowedList := strings.Split(allowedDomains, ",")
-		for _, requested := range domains {
-			found := false
-			for _, allowed := range allowedList {
-				if strings.TrimSpace(allowed) == requested {
-					found = true
-					break
-				}
-			}
-			if !found {
-				return fmt.Errorf("domain %q not in entity's allowed_domains: %s", requested, allowedDomains)
-			}
-		}
-		return nil
-	}
-
-	for _, requested := range domains {
-		matched := false
-		roles, err := p.configStore.ListRoles(context.Background())
-		if err != nil {
-			p.logger.Warn("could not list roles", "error", err)
-			continue
-		}
-		p.logger.Info("role check", "domain", requested, "roles", roles)
-
-		for _, roleName := range roles {
-			role, err := p.configStore.GetRole(context.Background(), roleName)
-			if err != nil {
-				p.logger.Warn("could not get role", "name", roleName, "error", err)
-				continue
-			}
-			p.logger.Info("checking role", "role", roleName, "allowed", role.AllowedNames, "domain", requested)
-			if matchGlob(role.AllowedNames, requested) {
-				matched = true
-				p.logger.Info("matched", "role", roleName)
-				break
-			}
-		}
-
-		if !matched {
-			return fmt.Errorf("domain %q does not match any DNS provider role allowed_names", requested)
-		}
-	}
-
-	return nil
-}
-
 // --- Helpers ---
 
 func generateID() string {
@@ -696,6 +589,8 @@ func parseKey(data []byte) (crypto.PrivateKey, error) {
 	case "RSA PRIVATE KEY":
 		return x509.ParsePKCS1PrivateKey(block.Bytes)
 	case "EC PRIVATE KEY":
+		return x509.ParsePKCS1PrivateKey(block.Bytes)
+	case "ECDSA PRIVATE KEY":
 		return x509.ParseECPrivateKey(block.Bytes)
 	case "PRIVATE KEY":
 		return x509.ParsePKCS8PrivateKey(block.Bytes)
@@ -738,42 +633,12 @@ type DNSRoleRequest struct {
 	AllowedNames string                 `json:"allowed_names"`
 }
 
-// acmeUser implements registration.User.
-type acmeUser struct {
-	email      string
-	privateKey crypto.PrivateKey
-	reg        *registration.Resource
-}
-
-func (u *acmeUser) GetEmail() string              { return u.email }
-func (u *acmeUser) GetPrivateKey() crypto.PrivateKey { return u.privateKey }
-func (u *acmeUser) GetRegistration() *registration.Resource {
-	return u.reg
-}
-func (u *acmeUser) SetRegistration(r *registration.Resource) { u.reg = r }
-
 // writeJSON writes a JSON response.
 func writeJSON(w http.ResponseWriter, statusCode int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 	json.NewEncoder(w).Encode(data)
 }
-
-// --- OpenBao Plugin (NetRPCUnsupportedPlugin) ---
-
-// BaoDNSPlugin is the OpenBao plugin shim.
-type BaoDNSPlugin struct {
-	plugin.NetRPCUnsupportedPlugin
-	impl *Plugin
-}
-
-// NewBaoDNSPlugin creates the OpenBao plugin wrapper.
-func NewBaoDNSPlugin(logger hclog.Logger) *BaoDNSPlugin {
-	return &BaoDNSPlugin{impl: NewPlugin(logger)}
-}
-
-// GetImpl returns the plugin implementation.
-func (p *BaoDNSPlugin) GetImpl() *Plugin { return p.impl }
 
 // --- Main entry point ---
 
@@ -844,7 +709,7 @@ func main() {
 }
 
 func buildPlugin(logger hclog.Logger) *Plugin {
-	impl := NewBaoDNSPlugin(logger).GetImpl()
+	impl := NewPlugin(logger)
 
 	// Use in-memory storage for testing
 	backend := storage.NewMemoryStorage()

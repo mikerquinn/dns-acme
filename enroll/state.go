@@ -252,7 +252,6 @@ func (i *Issuer) processEnrollment(ctx context.Context, state *EnrollmentState) 
 	state.State = "completed"
 	state.Certificate = string(certRes.Certificate)
 	state.NotAfter = parsedCert.NotAfter
-	state.Provider = state.Provider
 	state.UpdatedAt = time.Now()
 	i.store.UpdateEnrollment(ctx, state)
 }
@@ -280,14 +279,4 @@ func (w *dns01ProviderWrapper) CleanUp(domain, token, keyAuth string) error {
 	return w.provider.CleanUp(context.Background(), domain, token, keyAuth)
 }
 
-// simpleLogger is a minimal logger implementation for lego.
-type simpleLogger struct{}
 
-func (l *simpleLogger) Debugf(msg string, args ...interface{}) { fmt.Printf("[lego] DEBUG: "+msg+"\n", args...) }
-func (l *simpleLogger) Infof(msg string, args ...interface{})  { fmt.Printf("[lego] INFO:  "+msg+"\n", args...) }
-func (l *simpleLogger) Warnf(msg string, args ...interface{})  { fmt.Printf("[lego] WARN:  "+msg+"\n", args...) }
-func (l *simpleLogger) Errorf(msg string, args ...interface{}) { fmt.Printf("[lego] ERROR: "+msg+"\n", args...) }
-func (l *simpleLogger) Debug(msg string)                       { fmt.Printf("[lego] DEBUG: %s\n", msg) }
-func (l *simpleLogger) Info(msg string)                        { fmt.Printf("[lego] INFO:  %s\n", msg) }
-func (l *simpleLogger) Warn(msg string)                        { fmt.Printf("[lego] WARN:  %s\n", msg) }
-func (l *simpleLogger) Error(msg string)                       { fmt.Printf("[lego] ERROR: %s\n", msg) }

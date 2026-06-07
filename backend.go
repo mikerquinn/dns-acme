@@ -21,7 +21,6 @@ import (
 	log "github.com/hashicorp/go-hclog"
 	"github.com/openbao/openbao/sdk/v2/logical"
 	cryptoPkg "github.com/openbao/dnsacme/crypto"
-	"github.com/openbao/dnsacme/dns"
 	"github.com/openbao/dnsacme/enroll"
 	"github.com/openbao/dnsacme/storage"
 )
@@ -38,12 +37,6 @@ type dnsacmeBackend struct {
 func (b *dnsacmeBackend) Setup(ctx context.Context, config *logical.BackendConfig) error {
 	storageBackend := &openbaoStorageView{storage: config.StorageView}
 	b.Init(ctx, storageBackend)
-
-	factory := &dns.LegoProviderFactory{}
-	for _, name := range dns.ListSupportedProviders() {
-		b.registry.Register(name, factory)
-	}
-
 	return nil
 }
 
@@ -143,7 +136,7 @@ func (b *dnsacmeBackend) HandleRequest(ctx context.Context, req *logical.Request
 	case path == "revoke":
 		switch req.Operation {
 		case logical.UpdateOperation:
-			return b.handleRevokeHTTP(httpReq)
+			return b.handleRevokeData(req.Data)
 		}
 	}
 
@@ -193,7 +186,7 @@ func (s *openbaoStorageView) Put(ctx context.Context, key string, value []byte) 
 func (s *openbaoStorageView) Get(ctx context.Context, key string) ([]byte, error) {
 	entry, err := s.storage.Get(ctx, key)
 	if err != nil || entry == nil {
-		return nil, storage.ErrNotFound(key)
+		return nil, &storage.NotFoundError{Key: key}
 	}
 	return entry.Value, nil
 }
@@ -294,29 +287,29 @@ func (b *dnsacmeBackend) handleSetConfigData(data map[string]interface{}) (*logi
 	email, _ := data["email"].(string)
 	key, _ := data["key"].(string)
 	acmeURL, _ := data["acme_url"].(string)
-	
+
 	if email == "" || key == "" {
 		return &logical.Response{Data: map[string]interface{}{"error": "email and key are required"}}, nil
 	}
-	
+
 	parsedKey, err := parseKey([]byte(key))
 	if err != nil {
 		return &logical.Response{Data: map[string]interface{}{"error": "invalid key: " + err.Error()}}, nil
 	}
-	
+
 	if b.configStore != nil {
 		if err := b.configStore.SetACMEAccount(context.Background(), &storage.ACMEAccount{Email: email, Key: key}); err != nil {
 			return &logical.Response{Data: map[string]interface{}{"error": "failed to store ACME account"}}, nil
 		}
 	}
-	
+
 	b.acmeEmail = email
 	b.acmeKeyPEM = key
 	b.acmeKey = parsedKey
 	if acmeURL != "" {
 		b.acmeURL = acmeURL
 	}
-	
+
 	return &logical.Response{Data: map[string]interface{}{"message": "ACME account configured", "email": email}}, nil
 }
 
@@ -332,40 +325,6 @@ func (b *dnsacmeBackend) handleGetConfigHTTP(r *http.Request) (*logical.Response
 		return &logical.Response{Data: map[string]interface{}{"error": "ACME account not configured"}}, nil
 	}
 	return &logical.Response{Data: map[string]interface{}{"email": email}}, nil
-}
-
-func (b *dnsacmeBackend) handleSetConfigHTTP(r *http.Request) (*logical.Response, error) {
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		return &logical.Response{Data: map[string]interface{}{"error": "failed to read request body"}}, nil
-	}
-	var req struct {
-		Email   string `json:"email"`
-		Key     string `json:"key"`
-		ACMEURL string `json:"acme_url"`
-	}
-	if err := json.Unmarshal(body, &req); err != nil {
-		return &logical.Response{Data: map[string]interface{}{"error": "invalid Data: " + err.Error()}}, nil
-	}
-	if req.Email == "" || req.Key == "" {
-		return &logical.Response{Data: map[string]interface{}{"error": "email and key are required"}}, nil
-	}
-	parsedKey, err := parseKey([]byte(req.Key))
-	if err != nil {
-		return &logical.Response{Data: map[string]interface{}{"error": "invalid key: " + err.Error()}}, nil
-	}
-	if b.configStore != nil {
-		if err := b.configStore.SetACMEAccount(r.Context(), &storage.ACMEAccount{Email: req.Email, Key: req.Key}); err != nil {
-			return &logical.Response{Data: map[string]interface{}{"error": "failed to store ACME account"}}, nil
-		}
-	}
-	b.acmeEmail = req.Email
-	b.acmeKeyPEM = req.Key
-	b.acmeKey = parsedKey
-	if req.ACMEURL != "" {
-		b.acmeURL = req.ACMEURL
-	}
-	return &logical.Response{Data: map[string]interface{}{"message": "ACME account configured", "email": req.Email}}, nil
 }
 
 func (b *dnsacmeBackend) handleListRolesHTTP(r *http.Request) (*logical.Response, error) {
@@ -384,40 +343,25 @@ func (b *dnsacmeBackend) handleGetRoleHTTP(name string, r *http.Request) (*logic
 	return &logical.Response{Data: map[string]interface{}{"role": role}}, nil
 }
 
-func (b *dnsacmeBackend) handleSetRoleHTTP(name string, r *http.Request) (*logical.Response, error) {
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		return &logical.Response{Data: map[string]interface{}{"error": "failed to read request body"}}, nil
+func (b *dnsacmeBackend) handleDeleteRoleHTTP(name string, r *http.Request) (*logical.Response, error) {
+	if err := b.configStore.DeleteRole(r.Context(), name); err != nil {
+		return &logical.Response{Data: map[string]interface{}{"error": "failed to delete role: " + err.Error()}}, nil
 	}
-	var req DNSRoleRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		return &logical.Response{Data: map[string]interface{}{"error": "invalid Data: " + err.Error()}}, nil
-	}
-	if req.Provider == "" || req.AllowedNames == "" || len(req.Credentials) == 0 {
-		return &logical.Response{Data: map[string]interface{}{"error": "provider, allowed_names, and credentials are required"}}, nil
-	}
-	if err := b.registry.ValidateProvider(req.Provider); err != nil {
-		return &logical.Response{Data: map[string]interface{}{"error": "invalid provider: " + err.Error()}}, nil
-	}
-	role := &storage.DNSRole{Name: name, Provider: req.Provider, Credentials: req.Credentials, AllowedNames: req.AllowedNames}
-	if err := b.configStore.SetRole(r.Context(), role); err != nil {
-		return &logical.Response{Data: map[string]interface{}{"error": "failed to store role"}}, nil
-	}
-	return &logical.Response{Data: map[string]interface{}{"message": "role configured", "name": name, "provider": role.Provider, "role": role}}, nil
+	return &logical.Response{Data: map[string]interface{}{"message": "role deleted", "name": name}}, nil
 }
 
 func (b *dnsacmeBackend) handleSetRoleData(name string, data map[string]interface{}) (*logical.Response, error) {
 	provider, _ := data["provider"].(string)
 	allowedNames, _ := data["allowed_names"].(string)
-	
+
 	if provider == "" || allowedNames == "" {
 		return &logical.Response{Data: map[string]interface{}{"error": "provider and allowed_names are required"}}, nil
 	}
-	
+
 	if err := b.registry.ValidateProvider(provider); err != nil {
 		return &logical.Response{Data: map[string]interface{}{"error": "invalid provider: " + err.Error()}}, nil
 	}
-	
+
 	// Extract all remaining keys as credentials
 	credentials := make(map[string]interface{})
 	for k, v := range data {
@@ -429,7 +373,7 @@ func (b *dnsacmeBackend) handleSetRoleData(name string, data map[string]interfac
 			credentials[k] = v
 		}
 	}
-	
+
 	role := &storage.DNSRole{Name: name, Provider: provider, Credentials: credentials, AllowedNames: allowedNames}
 	if err := b.configStore.SetRole(context.Background(), role); err != nil {
 		return &logical.Response{Data: map[string]interface{}{"error": "failed to store role: " + err.Error()}}, nil
@@ -437,18 +381,11 @@ func (b *dnsacmeBackend) handleSetRoleData(name string, data map[string]interfac
 	return &logical.Response{Data: map[string]interface{}{"message": "role configured", "name": name, "provider": role.Provider}}, nil
 }
 
-func (b *dnsacmeBackend) handleDeleteRoleHTTP(name string, r *http.Request) (*logical.Response, error) {
-	if err := b.configStore.DeleteRole(r.Context(), name); err != nil {
-		return &logical.Response{Data: map[string]interface{}{"error": "failed to delete role: " + err.Error()}}, nil
-	}
-	return &logical.Response{Data: map[string]interface{}{"message": "role deleted", "name": name}}, nil
-}
-
 func (b *dnsacmeBackend) handleEnrollData(r *http.Request, data map[string]interface{}, entityID, domain string, metadata map[string]string) (*logical.Response, error) {
 	csrStr, _ := data["csr"].(string)
 	acmeURL, _ := data["acme_url"].(string)
 	acmeEmail, _ := data["acme_email"].(string)
-	
+
 	// Try base64 decode in case it was double-encoded
 	if csrStr == "" {
 		csrBytes := data["csr"].([]byte)
@@ -456,11 +393,11 @@ func (b *dnsacmeBackend) handleEnrollData(r *http.Request, data map[string]inter
 			csrStr = string(csrBytes)
 		}
 	}
-	
+
 	if csrStr == "" {
 		return &logical.Response{Data: map[string]interface{}{"error": "CSR is required"}}, nil
 	}
-	
+
 	csrInfo, err := cryptoPkg.ParseCSRFromString(csrStr)
 	if err != nil {
 		return &logical.Response{Data: map[string]interface{}{"error": "invalid CSR: " + err.Error()}}, nil
@@ -468,14 +405,14 @@ func (b *dnsacmeBackend) handleEnrollData(r *http.Request, data map[string]inter
 	if len(csrInfo.Domains) == 0 {
 		return &logical.Response{Data: map[string]interface{}{"error": "CSR has no domain names"}}, nil
 	}
-	
+
 	// Validate entity authorization (skip if no entity context, e.g. dev CLI)
 	if domain != "" && len(metadata) > 0 {
 		if err := b.validateEntityAuthorization(domain, metadata, csrInfo.Domains); err != nil {
 			return &logical.Response{Data: map[string]interface{}{"error": "entity not authorized: " + err.Error()}}, nil
 		}
 	}
-	
+
 	// Find matching role and set provider/credentials
 	var matchedProvider string
 	var matchedCredentials map[string]interface{}
@@ -496,7 +433,7 @@ func (b *dnsacmeBackend) handleEnrollData(r *http.Request, data map[string]inter
 			break
 		}
 	}
-	
+
 	enrollmentID := generateID()
 	state := enroll.NewEnrollmentState(enrollmentID, csrStr, csrInfo.Domains, acmeURL)
 	if acmeEmail != "" {
@@ -506,56 +443,15 @@ func (b *dnsacmeBackend) handleEnrollData(r *http.Request, data map[string]inter
 	}
 	state.Provider = matchedProvider
 	state.Credentials = matchedCredentials
-	
+
 	if err := b.enrollStore.CreateEnrollment(r.Context(), state); err != nil {
 		return &logical.Response{Data: map[string]interface{}{"error": "failed to create enrollment: " + err.Error()}}, nil
 	}
-	
-	if b.issuer != nil {
-		b.issuer.StartEnrollment(r.Context(), enrollmentID)
-	}
-	
-	return &logical.Response{Data: map[string]interface{}{
-		"id": enrollmentID, "state": "pending", "domains": csrInfo.Domains,
-		"message": "enrollment initiated, DNS-01 challenge in progress",
-		"retrieve_url": "/enroll/retrieve/" + enrollmentID,
-	}}, nil
-}
 
-func (b *dnsacmeBackend) handleEnrollHTTP(r *http.Request, entityID, domain string, metadata map[string]string) (*logical.Response, error) {
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		return &logical.Response{Data: map[string]interface{}{"error": "failed to read request body"}}, nil
-	}
-	var req struct {
-		CSR        string `json:"csr"`
-		ACMEEmail  string `json:"acme_email"`
-		ACMEKeyPEM string `json:"acme_key_pem"`
-		ACMEURL    string `json:"acme_url"`
-	}
-	if err := json.Unmarshal(body, &req); err != nil {
-		return &logical.Response{Data: map[string]interface{}{"error": "invalid Data: " + err.Error()}}, nil
-	}
-	csrInfo, err := cryptoPkg.ParseCSRFromString(req.CSR)
-	if err != nil {
-		return &logical.Response{Data: map[string]interface{}{"error": "invalid CSR: " + err.Error()}}, nil
-	}
-	if len(csrInfo.Domains) == 0 {
-		return &logical.Response{Data: map[string]interface{}{"error": "CSR has no domain names"}}, nil
-	}
-	if err := b.validateEntityAuthorization(domain, metadata, csrInfo.Domains); err != nil {
-		return &logical.Response{Data: map[string]interface{}{"error": "entity not authorized: " + err.Error()}}, nil
-	}
-	enrollmentID := generateID()
-	state := enroll.NewEnrollmentState(enrollmentID, req.CSR, csrInfo.Domains, req.ACMEURL)
-	state.ACMEEmail = b.acmeEmail
-	state.Credentials = map[string]interface{}{}
-	if err := b.enrollStore.CreateEnrollment(r.Context(), state); err != nil {
-		return &logical.Response{Data: map[string]interface{}{"error": "failed to create enrollment"}}, nil
-	}
 	if b.issuer != nil {
 		b.issuer.StartEnrollment(r.Context(), enrollmentID)
 	}
+
 	return &logical.Response{Data: map[string]interface{}{
 		"id": enrollmentID, "state": "pending", "domains": csrInfo.Domains,
 		"message": "enrollment initiated, DNS-01 challenge in progress",
@@ -593,42 +489,39 @@ func (b *dnsacmeBackend) handleRetrieveHTTP(id string, r *http.Request) (*logica
 	}
 }
 
-func (b *dnsacmeBackend) handleRevokeHTTP(r *http.Request) (*logical.Response, error) {
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		return &logical.Response{Data: map[string]interface{}{"error": "failed to read request body"}}, nil
-	}
-	var req struct {
-		Certificate string `json:"certificate"`
-		ID          string `json:"id"`
-	}
-	if err := json.Unmarshal(body, &req); err != nil {
-		return &logical.Response{Data: map[string]interface{}{"error": "invalid Data: " + err.Error()}}, nil
-	}
-	if req.ID != "" {
-		state, err := b.enrollStore.GetEnrollment(r.Context(), req.ID)
+func (b *dnsacmeBackend) handleRevokeData(data map[string]interface{}) (*logical.Response, error) {
+	certStr, _ := data["certificate"].(string)
+	id, _ := data["id"].(string)
+
+	if id != "" {
+		state, err := b.enrollStore.GetEnrollment(context.Background(), id)
 		if err != nil {
 			return &logical.Response{Data: map[string]interface{}{"error": "enrollment not found: " + err.Error()}}, nil
 		}
 		state.State = "cancelled"
-		b.enrollStore.UpdateEnrollment(r.Context(), state)
-		return &logical.Response{Data: map[string]interface{}{"id": req.ID, "message": "enrollment cancelled", "domains": state.Domains}}, nil
+		b.enrollStore.UpdateEnrollment(context.Background(), state)
+		return &logical.Response{Data: map[string]interface{}{"id": id, "message": "enrollment cancelled", "domains": state.Domains}}, nil
 	}
-	if req.Certificate == "" {
+
+	if certStr == "" {
 		return &logical.Response{Data: map[string]interface{}{"error": "certificate or enrollment id is required"}}, nil
 	}
-	certParsed, err := cryptoPkg.ParseCertificate([]byte(req.Certificate))
+
+	certParsed, err := cryptoPkg.ParseCertificate([]byte(certStr))
 	if err != nil {
 		return &logical.Response{Data: map[string]interface{}{"error": "invalid certificate: " + err.Error()}}, nil
 	}
+
 	key, err := parseKey([]byte(b.acmeKeyPEM))
 	if err != nil {
 		return &logical.Response{Data: map[string]interface{}{"error": "failed to parse ACME key: " + err.Error()}}, nil
 	}
+
 	acmeURL := b.acmeURL
 	if acmeURL == "" {
 		acmeURL = "https://acme-v02.api.letsencrypt.org/directory"
 	}
+
 	user := &acmeUser{email: b.acmeEmail, privateKey: key, reg: nil}
 	config := lego.NewConfig(user)
 	config.CADirURL = acmeURL
@@ -638,16 +531,83 @@ func (b *dnsacmeBackend) handleRevokeHTTP(r *http.Request) (*logical.Response, e
 	if err != nil {
 		return &logical.Response{Data: map[string]interface{}{"error": "failed to create ACME client: " + err.Error()}}, nil
 	}
-	parsedCert, err := x509.ParseCertificate([]byte(req.Certificate))
+
+	parsedCert, err := x509.ParseCertificate([]byte(certStr))
 	if err != nil {
 		return &logical.Response{Data: map[string]interface{}{"error": "failed to parse certificate: " + err.Error()}}, nil
 	}
+
 	if err := client.Certificate.Revoke(parsedCert.Raw); err != nil {
 		return &logical.Response{Data: map[string]interface{}{"error": "failed to revoke certificate: " + err.Error()}}, nil
 	}
+
 	return &logical.Response{Data: map[string]interface{}{"message": "certificate revoked", "serial": certParsed.SerialNumber.String()}}, nil
 }
 
+// acmeUser implements registration.User for ACME interactions.
+type acmeUser struct {
+	email      string
+	privateKey crypto.PrivateKey
+	reg        *registration.Resource
+}
 
+func (u *acmeUser) GetEmail() string              { return u.email }
+func (u *acmeUser) GetPrivateKey() crypto.PrivateKey { return u.privateKey }
+func (u *acmeUser) GetRegistration() *registration.Resource {
+	return u.reg
+}
+func (u *acmeUser) SetRegistration(r *registration.Resource) { u.reg = r }
 
+// validateEntityAuthorization checks whether the requesting entity is authorized
+// for the requested domains. It uses entity metadata (allowed_domains) or
+// DNS provider roles (allowed_names) as the authorization source.
+func (b *dnsacmeBackend) validateEntityAuthorization(domain string, metadata map[string]string, domains []string) error {
+	b.logger.Info("validateEntityAuthorization", "domains", domains, "metadata", metadata, "configStore", b.configStore != nil)
 
+	if allowedDomains, ok := metadata["allowed_domains"]; ok && allowedDomains != "" {
+		allowedList := strings.Split(allowedDomains, ",")
+		for _, requested := range domains {
+			found := false
+			for _, allowed := range allowedList {
+				if strings.TrimSpace(allowed) == requested {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return fmt.Errorf("domain %q not in entity's allowed_domains: %s", requested, allowedDomains)
+			}
+		}
+		return nil
+	}
+
+	for _, requested := range domains {
+		matched := false
+		roles, err := b.configStore.ListRoles(context.Background())
+		if err != nil {
+			b.logger.Warn("could not list roles", "error", err)
+			continue
+		}
+		b.logger.Info("role check", "domain", requested, "roles", roles)
+
+		for _, roleName := range roles {
+			role, err := b.configStore.GetRole(context.Background(), roleName)
+			if err != nil {
+				b.logger.Warn("could not get role", "name", roleName, "error", err)
+				continue
+			}
+			b.logger.Info("checking role", "role", roleName, "allowed", role.AllowedNames, "domain", requested)
+			if matchGlob(role.AllowedNames, requested) {
+				matched = true
+				b.logger.Info("matched", "role", roleName)
+				break
+			}
+		}
+
+		if !matched {
+			return fmt.Errorf("domain %q does not match any DNS provider role allowed_names", requested)
+		}
+	}
+
+	return nil
+}

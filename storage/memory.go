@@ -60,13 +60,6 @@ func (s *MemoryStorage) List(ctx context.Context, prefix string) ([]string, erro
 	return keys, nil
 }
 
-// Clear removes all data.
-func (s *MemoryStorage) Clear() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.data = make(map[string][]byte)
-}
-
 // NotFoundError is returned when a key is not found.
 type NotFoundError struct {
 	Key string
@@ -76,6 +69,3 @@ func (e *NotFoundError) Error() string {
 	return "key not found: " + e.Key
 }
 
-func ErrNotFound(key string) *NotFoundError {
-	return &NotFoundError{Key: key}
-}

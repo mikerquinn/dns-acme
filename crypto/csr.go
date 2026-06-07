@@ -54,20 +54,6 @@ func ParseCSR(pemData []byte) (*CSRInfo, error) {
 	return info, nil
 }
 
-// ParseCSRRaw parses a DER-encoded CSR.
-func ParseCSRRaw(derData []byte) (*CSRInfo, error) {
-	csr, err := x509.ParseCertificateRequest(derData)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse DER CSR: %w", err)
-	}
-
-	return &CSRInfo{
-		Domains:    extractDomains(csr),
-		SubjectCN:  csr.Subject.CommonName,
-		RawBytes:   derData,
-	}, nil
-}
-
 // ParseCSRFromString parses a CSR from a string (PEM format).
 func ParseCSRFromString(csrPEM string) (*CSRInfo, error) {
 	return ParseCSR([]byte(csrPEM))
@@ -106,20 +92,6 @@ func extractDomains(csr *x509.CertificateRequest) []string {
 	return result
 }
 
-// NormalizeDomains normalizes a list of domain names.
-func NormalizeDomains(domains []string) []string {
-	seen := make(map[string]bool)
-	var result []string
-	for _, d := range domains {
-		normalized := strings.ToLower(strings.TrimSpace(d))
-		if normalized != "" && !seen[normalized] {
-			seen[normalized] = true
-			result = append(result, normalized)
-		}
-	}
-	return result
-}
-
 // ParseCertificate parses a PEM-encoded certificate.
 func ParseCertificate(pemData []byte) (*x509.Certificate, error) {
 	block, _ := pem.Decode(pemData)
@@ -129,23 +101,4 @@ func ParseCertificate(pemData []byte) (*x509.Certificate, error) {
 	return x509.ParseCertificate(block.Bytes)
 }
 
-// GetCertificateDomains extracts domain names from a certificate.
-func GetCertificateDomains(cert *x509.Certificate) []string {
-	domains := make(map[string]bool)
 
-	// CommonName is a string in newer Go versions
-	if cert.Subject.CommonName != "" {
-		domains[strings.ToLower(cert.Subject.CommonName)] = true
-	}
-
-	for _, name := range cert.DNSNames {
-		domains[strings.ToLower(name)] = true
-	}
-
-	result := make([]string, 0, len(domains))
-	for domain := range domains {
-		result = append(result, domain)
-	}
-
-	return result
-}

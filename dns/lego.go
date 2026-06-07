@@ -10,6 +10,33 @@ import (
 	legodns "github.com/go-acme/lego/v4/providers/dns"
 )
 
+// ListSupportedProviders returns a list of all DNS providers supported by lego.
+func ListSupportedProviders() []string {
+	// These are the providers built into lego
+	return []string{
+		"manual", "acme-dns", "alidns", "allinkl", "arvancloud", "auroradns",
+		"autodns", "azure", "azuredns", "bindman", "bluecat", "brandit", "bunny",
+		"checkdomain", "civo", "clouddns", "cloudflare", "cloudns", "cloudru",
+		"cloudxns", "conoha", "constellix", "cpanel", "dasnetis", "deSEC",
+		"designate", "digitalocean", "dnsimple", "dnspod", "dode", "dreamhost",
+		"dslite", "duckdns", "dyndns", "edgedns", "easydns", "eiq", "elx",
+		"exoscale", "freemyip", "gandi", "gandiv5", "gcloud", "godaddy",
+		"googledomains", "hetzner", "hostingde", "hosttech", "httpreq", "hurricane",
+		"hyperone", "ibmcloud", "iij", "iijdpf", "infoblox", "inwx", "ionos",
+		"ipv4", "iwantmyname", "joker", "kkcloud", "kloxo", "lesweb", "linode",
+		"liquidweb", "loopia", "luadns", "mailinabox", "metaname", "mythicbeasts",
+		"namecheap", "namedotcom", "namesilo", "nearlyfreespeech", "netcup",
+		"netlify", "nicmanager", "nicname", "nifcloud", "njalla", "nodion",
+		"ns1", "oraclecloud", "otc", "ovh", "pdns", "plesk", "porkbun",
+		"rackspace", "ramspace", "rayhosting", "regfish", "regru", "rfc2136",
+		"route53", "sakuracloud", "scaleway", "selectel", "servercow", "simpledns",
+		"smartdns", "sofastack", "stackpath", "tencentcloud", "transip",
+		"ultradns", "vegadns", "vercel", "versio", "vinyldns", "volcengine",
+		"vultr", "webnames", "websupport", "yandex", "yandex360", "yandexcloud",
+		"zoneee",
+	}
+}
+
 // legoProviderWrapper wraps a lego DNS provider to implement our generic Provider interface.
 type legoProviderWrapper struct {
 	name     string
@@ -21,9 +48,6 @@ func (w *legoProviderWrapper) Name() string {
 }
 
 func (w *legoProviderWrapper) Present(ctx context.Context, domain, token, keyAuth string) error {
-	// Debug: log the domain being passed to Present
-	fmt.Printf("DEBUG lego Present: domain=%s token=%s keyAuth=%s\n", domain, token, keyAuth)
-
 	v := reflect.ValueOf(w.provider)
 	method := v.MethodByName("Present")
 	if !method.IsValid() {
@@ -127,54 +151,4 @@ func (f *LegoProviderFactory) NewProvider(config map[string]interface{}) (Provid
 		name:     providerName,
 		provider: provider,
 	}, nil
-}
-
-// IsValidProvider checks if a provider name is supported by lego without creating an instance.
-// This is useful for validating provider names at role store time without requiring credentials.
-func (f *LegoProviderFactory) IsValidProvider(name string) bool {
-	for _, p := range ListSupportedProviders() {
-		if p == name {
-			return true
-		}
-	}
-	return false
-}
-
-// GetChallengeDomain returns the FQDN for DNS-01 challenge records.
-func GetChallengeDomain(domain string) string {
-	return fmt.Sprintf("_acme-challenge.%s", domain)
-}
-
-// GetKeyAuth computes the key authorization string for the DNS-01 challenge.
-func GetKeyAuth(thumbprint, token string) string {
-	// keyAuth = base64url(SHA256(thumbprint + "." + base64url(urlEncode(token))))
-	// This matches lego's dns01.GetChallengeTxtRecord
-	return fmt.Sprintf("%s.%s", thumbprint, token)
-}
-
-// ListSupportedProviders returns a list of all DNS providers supported by lego.
-func ListSupportedProviders() []string {
-	// These are the providers built into lego
-	return []string{
-		"manual", "acme-dns", "alidns", "allinkl", "arvancloud", "auroradns",
-		"autodns", "azure", "azuredns", "bindman", "bluecat", "brandit", "bunny",
-		"checkdomain", "civo", "clouddns", "cloudflare", "cloudns", "cloudru",
-		"cloudxns", "conoha", "constellix", "cpanel", "dasnetis", "deSEC",
-		"designate", "digitalocean", "dnsimple", "dnspod", "dode", "dreamhost",
-		"dslite", "duckdns", "dyndns", "edgedns", "easydns", "eiq", "elx",
-		"exoscale", "freemyip", "gandi", "gandiv5", "gcloud", "godaddy",
-		"googledomains", "hetzner", "hostingde", "hosttech", "httpreq", "hurricane",
-		"hyperone", "ibmcloud", "iij", "iijdpf", "infoblox", "inwx", "ionos",
-		"ipv4", "iwantmyname", "joker", "kkcloud", "kloxo", "lesweb", "linode",
-		"liquidweb", "loopia", "luadns", "mailinabox", "metaname", "mythicbeasts",
-		"namecheap", "namedotcom", "namesilo", "nearlyfreespeech", "netcup",
-		"netlify", "nicmanager", "nicname", "nifcloud", "njalla", "nodion",
-		"ns1", "oraclecloud", "otc", "ovh", "pdns", "plesk", "porkbun",
-		"rackspace", "ramspace", "rayhosting", "regfish", "regru", "rfc2136",
-		"route53", "sakuracloud", "scaleway", "selectel", "servercow", "simpledns",
-		"smartdns", "sofastack", "stackpath", "tencentcloud", "transip",
-		"ultradns", "vegadns", "vercel", "versio", "vinyldns", "volcengine",
-		"vultr", "webnames", "websupport", "yandex", "yandex360", "yandexcloud",
-		"zoneee",
-	}
 }
