@@ -76,12 +76,9 @@ func (s *ConfigStorage) ListRoles(ctx context.Context) ([]string, error) {
 
 	var roles []string
 	for _, key := range keys {
-		if key == configKeyList {
-			continue // skip the "roles" directory entry itself
-		}
-		name := key[len(configKeyRoles):]
-		if name != "" {
-			roles = append(roles, name)
+		// OpenBao's List returns keys relative to the prefix, so we use them directly
+		if key != "" {
+			roles = append(roles, key)
 		}
 	}
 

@@ -64,21 +64,32 @@ func NewPlugin(logger hclog.Logger) *Plugin {
 
 // Init sets up the plugin with storage and issuer.
 func (p *Plugin) Init(ctx context.Context, backend storage.StorageBackend) {
+	if backend == nil {
+		p.logger.Warn("Init called with nil backend, using memory storage")
+		backend = &memoryBackend{}
+	}
 	p.configStore = storage.NewConfigStorage(backend)
 	p.enrollStore = enroll.NewEnrollmentStorage(backend)
+	f, _ := os.Create("/tmp/plugin_debug.log"); if f != nil { fmt.Fprintf(f, "DEBUG Init complete: configStore=%v enrollStore=%v\n", p.configStore != nil, p.enrollStore != nil); f.Close() }
 
 	// Try to load ACME account from storage
-	if p.configStore != nil {
-		account, err := p.configStore.GetACMEAccount(ctx)
-		if err == nil {
-			p.acmeEmail = account.Email
-			p.acmeKeyPEM = account.Key
-			p.logger.Info("loaded ACME account from storage")
-		}
+	account, err := p.configStore.GetACMEAccount(ctx)
+	if err == nil {
+		p.acmeEmail = account.Email
+		p.acmeKeyPEM = account.Key
+		p.logger.Info("loaded ACME account from storage")
 	}
 
 	p.issuer = enroll.NewIssuer(p.enrollStore, p.registry)
 }
+
+// memoryBackend is a minimal in-memory fallback for when OpenBao storage is not yet available.
+type memoryBackend struct{}
+
+func (*memoryBackend) Put(ctx context.Context, key string, value []byte) error            { return nil }
+func (*memoryBackend) Get(ctx context.Context, key string) ([]byte, error)                { return nil, &storage.NotFoundError{Key: key} }
+func (*memoryBackend) Delete(ctx context.Context, key string) error                       { return nil }
+func (*memoryBackend) List(ctx context.Context, prefix string) ([]string, error)          { return nil, nil }
 
 // RegisterPaths registers all HTTP routes on the mux.
 func (p *Plugin) RegisterPaths(mux *http.ServeMux) {
@@ -682,7 +693,10 @@ func main() {
 			3: {
 				"backend": &pb.GRPCBackendPlugin{
 					Factory: func(ctx context.Context, config *logical.BackendConfig) (logical.Backend, error) {
-						return &dnsacmeBackend{Plugin: impl}, nil
+						if impl.configStore == nil {
+							impl.Init(ctx, &openbaoStorageView{storage: config.StorageView})
+						}
+						return &dnsacmeBackend{Plugin: impl, logger: logger}, nil
 					},
 					Logger: logger,
 				},
@@ -690,7 +704,10 @@ func main() {
 			4: {
 				"backend": &pb.GRPCBackendPlugin{
 					Factory: func(ctx context.Context, config *logical.BackendConfig) (logical.Backend, error) {
-						return &dnsacmeBackend{Plugin: impl}, nil
+						if impl.configStore == nil {
+							impl.Init(ctx, &openbaoStorageView{storage: config.StorageView})
+						}
+						return &dnsacmeBackend{Plugin: impl, logger: logger}, nil
 					},
 					Logger: logger,
 				},
@@ -698,7 +715,10 @@ func main() {
 			5: {
 				"backend": &pb.GRPCBackendPlugin{
 					Factory:             func(ctx context.Context, config *logical.BackendConfig) (logical.Backend, error) {
-						return &dnsacmeBackend{Plugin: impl}, nil
+						if impl.configStore == nil {
+							impl.Init(ctx, &openbaoStorageView{storage: config.StorageView})
+						}
+						return &dnsacmeBackend{Plugin: impl, logger: logger}, nil
 					},
 					Logger: logger,
 				},
@@ -718,6 +738,9 @@ func buildPlugin(logger hclog.Logger) *Plugin {
 	for _, name := range dns.ListSupportedProviders() {
 		impl.registry.Register(name, factory)
 	}
+
+	// Store logger reference for backend use
+	impl.logger = logger
 
 	return impl
 }

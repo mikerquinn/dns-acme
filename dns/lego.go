@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"strings"
 
 	legodns "github.com/go-acme/lego/v4/providers/dns"
 )
@@ -114,12 +115,29 @@ func (f *LegoProviderFactory) NewProvider(config map[string]interface{}) (Provid
 	}
 	var envVars []envPair
 
+	// Map of provider names to their env var prefix
+	providerPrefixes := map[string]string{
+		"cloudflare": "CLOUDFLARE",
+		"route53":    "AWS",
+		"azuredns":   "AZURE",
+		"gcloud":     "GOOGLE",
+		"digitalocean": "DIGITALOCEAN",
+		"linode":     "LINODE",
+		"namedotcom": "NAMECOM",
+		"rfc2136":    "RFC2136",
+	}
+	prefix, ok := providerPrefixes[providerName]
+	if !ok {
+		prefix = strings.ToUpper(providerName) // fallback: uppercase provider name
+	}
+
 	for k, v := range config {
 		if k == "provider" {
 			continue
 		}
 		if strVal, ok := v.(string); ok && strVal != "" {
-			envVars = append(envVars, envPair{k, strVal})
+			// Prefix env var with provider name for lego compatibility
+			envVars = append(envVars, envPair{prefix + "_" + strings.ToUpper(k), strVal})
 		}
 	}
 

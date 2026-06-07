@@ -7,11 +7,13 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -25,6 +27,15 @@ import (
 	"github.com/openbao/dnsacme/storage"
 )
 
+// _d is a debug helper that appends to a file
+var _d = func(s string) {
+	f, _ := os.OpenFile("/tmp/enroll_debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if f != nil {
+		fmt.Fprintf(f, "%s", s)
+		f.Close()
+	}
+}
+
 var _ logical.Backend = (*dnsacmeBackend)(nil)
 
 // dnsacmeBackend wraps the Plugin logic as a logical.Backend for OpenBao.
@@ -35,10 +46,22 @@ type dnsacmeBackend struct {
 
 // Setup is called once when the backend is mounted.
 func (b *dnsacmeBackend) Setup(ctx context.Context, config *logical.BackendConfig) error {
+	f, _ := os.Create("/tmp/plugin_debug.log")
+	if f != nil {
+		fmt.Fprintf(f, "DEBUG Setup called: storageView=%v logger=%v\n", config.StorageView != nil, b.logger != nil)
+		f.Close()
+	}
 	storageBackend := &openbaoStorageView{storage: config.StorageView}
 	b.Init(ctx, storageBackend)
+	f2, _ := os.Create("/tmp/plugin_debug.log")
+	if f2 != nil {
+		fmt.Fprintf(f2, "DEBUG Setup complete: configStore=%v enrollStore=%v\n", b.configStore != nil, b.enrollStore != nil)
+		f2.Close()
+	}
 	return nil
 }
+
+
 
 // Initialize is called after Setup.
 func (b *dnsacmeBackend) Initialize(ctx context.Context, req *logical.InitializationRequest) error {
@@ -351,6 +374,15 @@ func (b *dnsacmeBackend) handleDeleteRoleHTTP(name string, r *http.Request) (*lo
 }
 
 func (b *dnsacmeBackend) handleSetRoleData(name string, data map[string]interface{}) (*logical.Response, error) {
+	f, _ := os.Create("/tmp/plugin_debug.log")
+	if f != nil {
+		fmt.Fprintf(f, "DEBUG handleSetRoleData: configStore=%v logger=%v\n", b.configStore != nil, b.logger != nil)
+		f.Close()
+	}
+	if b.configStore == nil {
+		return &logical.Response{Data: map[string]interface{}{"error": "config storage not initialized"}}, nil
+	}
+
 	provider, _ := data["provider"].(string)
 	allowedNames, _ := data["allowed_names"].(string)
 
@@ -398,7 +430,16 @@ func (b *dnsacmeBackend) handleEnrollData(r *http.Request, data map[string]inter
 		return &logical.Response{Data: map[string]interface{}{"error": "CSR is required"}}, nil
 	}
 
-	csrInfo, err := cryptoPkg.ParseCSRFromString(csrStr)
+	// Try to base64 decode if the CSR looks like base64 (no PEM headers)
+	csrPEM := csrStr
+	if !strings.Contains(csrStr, "-----") {
+		decoded, err := base64.StdEncoding.DecodeString(csrStr)
+		if err == nil && len(decoded) > 0 {
+			csrPEM = string(decoded)
+		}
+	}
+
+	csrInfo, err := cryptoPkg.ParseCSRFromString(csrPEM)
 	if err != nil {
 		return &logical.Response{Data: map[string]interface{}{"error": "invalid CSR: " + err.Error()}}, nil
 	}
@@ -416,16 +457,20 @@ func (b *dnsacmeBackend) handleEnrollData(r *http.Request, data map[string]inter
 	// Find matching role and set provider/credentials
 	var matchedProvider string
 	var matchedCredentials map[string]interface{}
-	roles, _ := b.configStore.ListRoles(context.Background())
+	roles, listErr := b.configStore.ListRoles(context.Background())
+	_d(fmt.Sprintf("DEBUG enroll: roles=%v listErr=%v\n", roles, listErr))
 	for _, roleName := range roles {
 		role, err := b.configStore.GetRole(context.Background(), roleName)
 		if err != nil {
+			_d(fmt.Sprintf("DEBUG enroll: failed to get role %s: %v\n", roleName, err))
 			continue
 		}
+		_d(fmt.Sprintf("DEBUG enroll: checking role %s allowed_names=%q\n", roleName, role.AllowedNames))
 		for _, domainName := range csrInfo.Domains {
 			if matchGlob(role.AllowedNames, domainName) {
 				matchedProvider = role.Provider
 				matchedCredentials = role.Credentials
+				_d(fmt.Sprintf("DEBUG enroll: MATCHED domain %s with provider %s\n", domainName, matchedProvider))
 				break
 			}
 		}
@@ -434,8 +479,10 @@ func (b *dnsacmeBackend) handleEnrollData(r *http.Request, data map[string]inter
 		}
 	}
 
+	_d(fmt.Sprintf("DEBUG enroll: final matchedProvider=%q matchedCredentials=%v\n", matchedProvider, matchedCredentials))
+
 	enrollmentID := generateID()
-	state := enroll.NewEnrollmentState(enrollmentID, csrStr, csrInfo.Domains, acmeURL)
+	state := enroll.NewEnrollmentState(enrollmentID, csrPEM, csrInfo.Domains, acmeURL)
 	if acmeEmail != "" {
 		state.ACMEEmail = acmeEmail
 	} else {
