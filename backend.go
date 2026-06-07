@@ -226,6 +226,9 @@ func generateKey() (string, crypto.PrivateKey, error) {
 
 func (b *dnsacmeBackend) handleCreateACMEAccountHTTP(ctx context.Context, data map[string]interface{}) (*logical.Response, error) {
 	email, _ := data["email"].(string)
+	if email == "" {
+		email, _ = data["acme_email"].(string)
+	}
 	acmeURL, _ := data["acme_url"].(string)
 	if email == "" {
 		return &logical.Response{Data: map[string]interface{}{"error": "email is required"}}, nil
@@ -289,7 +292,13 @@ func (b *dnsacmeBackend) handleCreateACMEAccountHTTP(ctx context.Context, data m
 
 func (b *dnsacmeBackend) handleSetConfigData(data map[string]interface{}) (*logical.Response, error) {
 	email, _ := data["email"].(string)
+	if email == "" {
+		email, _ = data["acme_email"].(string)
+	}
 	key, _ := data["key"].(string)
+	if key == "" {
+		key, _ = data["acme_key"].(string)
+	}
 	acmeURL, _ := data["acme_url"].(string)
 
 	if email == "" || key == "" {
