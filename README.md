@@ -1,13 +1,13 @@
-# dnsacme-policy
+# dns-acme
 
 ## NAME
 
 
-**dnsacme-policy** — OpenBao DNS-01 ACME certificate issuance plugin with role-based domain authorization
+**dns-acme** — OpenBao DNS-01 ACME certificate issuance plugin with role-based domain authorization
 
 ## DESCRIPTION
 
-**dnsacme-policy** is an OpenBao secrets engine plugin that issues X.509
+**dns-acme** is an OpenBao secrets engine plugin that issues X.509
 certificates from any ACME-compatible certificate authority (CA) using the
 DNS-01 challenge mechanism.
 
@@ -45,14 +45,14 @@ until the certificate is issued.
 Register the plugin binary in the OpenBao plugin catalog, then enable it:
 
 ```bash
-bao plugin register -sha256=<SHA256> secret dnsacme-plugin
-bao secrets enable -path=dnsplugin -plugin-name=dnsacme-plugin plugin
+bao plugin register -sha256=<SHA256> secret dns-acme
+bao secrets enable -path=dnsplugin -plugin-name=dns-acme plugin
 ```
 
 To require TLS for the mount:
 
 ```bash
-bao secrets enable -tls-required=true -path=dnsplugin -plugin-name=dnsacme-plugin plugin
+bao secrets enable -tls-required=true -path=dnsplugin -plugin-name=dns-acme plugin
 ```
 
 ## API PATHS
@@ -517,7 +517,7 @@ storage. The following environment variables affect plugin startup:
 
 ## AUTHORS
 
-The dnsacme-policy plugin was developed for OpenBao by Michael Quinn
+The dns-acme plugin was developed for OpenBao by Michael Quinn
 <mikerquinn> as an ACME DNS-01 secrets engine for automated certificate
 provisioning with role-based domain authorization.
 
@@ -526,6 +526,6 @@ DNS-01 challenge resolution across 100+ DNS providers.
 
 ## VERSION
 
-This document describes version 1.0 of the dnsacme-policy plugin for OpenBao.
+This document describes version 1.0 of the dns-acme plugin for OpenBao.
 
 June 7, 2026
