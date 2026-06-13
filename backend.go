@@ -77,8 +77,8 @@ func (b *dnsacmeBackend) invalidate(ctx context.Context, key string) {
 	}
 }
 
-// handleConfigCreate creates a new ACME account with a generated key.
-func handleConfigCreate(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+// pathConfigCreate handles ACME account creation.
+func (b *dnsacmeBackend) pathConfigCreate(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
 	email, _ := d.GetOk("email")
 	acmeURL, _ := d.GetOk("acme_url")
 
@@ -124,7 +124,7 @@ func handleConfigCreate(ctx context.Context, req *logical.Request, d *framework.
 
 	// Store the account using the plugin's shared config store (same backend used by enrollment reads)
 	acmeAcc := &storage.ACMEAccount{Email: emailStr, Key: acmeKeyPEM}
-	if err := globalImpl.configStore.SetACMEAccount(ctx, acmeAcc); err != nil {
+	if err := b.configStore.SetACMEAccount(ctx, acmeAcc); err != nil {
 		return &logical.Response{Data: map[string]interface{}{"error": "failed to store ACME account: " + err.Error()}}, nil
 	}
 

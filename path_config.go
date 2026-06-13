@@ -227,11 +227,11 @@ func pathConfigCreate(b *dnsacmeBackend) []*framework.Path {
 		},
 		Operations: map[logical.Operation]framework.OperationHandler{
 			logical.CreateOperation: &framework.PathOperation{
-				Callback:  handleConfigCreate,
+				Callback:  b.pathConfigCreate,
 				Summary:   "Create ACME account with generated RSA-2048 key",
 			},
 			logical.UpdateOperation: &framework.PathOperation{
-				Callback:  handleConfigCreate,
+				Callback:  b.pathConfigCreate,
 				Summary:   "Create ACME account with generated RSA-2048 key",
 			},
 		},

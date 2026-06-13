@@ -9,9 +9,6 @@ import (
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
 
-// globalImpl holds the singleton plugin instance across all factory calls.
-var globalImpl *Plugin
-
 func main() {
 	logger := hclog.New(&hclog.LoggerOptions{
 		Name:       "dnsacme",
@@ -22,20 +19,20 @@ func main() {
 
 	logger.Info("DNS-01 ACME plugin starting in native plugin mode")
 
-	// Build the plugin with registered providers
-	globalImpl = buildPlugin(logger)
+	// Build the plugin with registered providers (singleton).
+	plugin := buildPlugin(logger)
 
 	pb.ServeMultiplex(&pb.ServeOpts{
 		BackendFactoryFunc: func(ctx context.Context, config *logical.BackendConfig) (logical.Backend, error) {
 			// Create a fully initialized backend via backend() so that
 			// *framework.Backend is set (hashicups pattern).
 			b := backend()
-			b.Plugin = globalImpl
+			b.Plugin = plugin
 			b.logger = logger
 
-			// Initialize the plugin with storage (lazy, singleton impl)
-			if globalImpl.configStore == nil {
-				globalImpl.Init(ctx, &openbaoStorageView{storage: config.StorageView})
+			// Initialize the plugin with storage (lazy init on first call).
+			if b.configStore == nil {
+				b.Init(ctx, &openbaoStorageView{storage: config.StorageView})
 			}
 
 			if err := b.Setup(ctx, config); err != nil {
