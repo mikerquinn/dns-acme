@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/openbao/dnsacme/storage"
+	"github.com/mikerquinn/dns-acme/storage"
 )
 
 // EnrollmentStorage wraps storage.Backend with enrollment-specific methods.

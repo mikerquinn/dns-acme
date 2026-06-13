@@ -9,9 +9,9 @@ import (
 	"github.com/hashicorp/go-plugin"
 	"github.com/openbao/openbao/sdk/v2/logical"
 	pb "github.com/openbao/openbao/sdk/v2/plugin"
-	"github.com/openbao/dnsacme/dns"
-	"github.com/openbao/dnsacme/enroll"
-	"github.com/openbao/dnsacme/storage"
+	"github.com/mikerquinn/dns-acme/dns"
+	"github.com/mikerquinn/dns-acme/enroll"
+	"github.com/mikerquinn/dns-acme/storage"
 )
 
 // --- Plugin implementation ---

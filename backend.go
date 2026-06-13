@@ -22,9 +22,9 @@ import (
 	"github.com/go-acme/lego/v4/registration"
 	log "github.com/hashicorp/go-hclog"
 	"github.com/openbao/openbao/sdk/v2/logical"
-	cryptoPkg "github.com/openbao/dnsacme/crypto"
-	"github.com/openbao/dnsacme/enroll"
-	"github.com/openbao/dnsacme/storage"
+	cryptoPkg "github.com/mikerquinn/dns-acme/crypto"
+	"github.com/mikerquinn/dns-acme/enroll"
+	"github.com/mikerquinn/dns-acme/storage"
 )
 
 
@@ -456,6 +456,14 @@ func (b *dnsacmeBackend) handleEnrollData(r *http.Request, data map[string]inter
 		if matchedProvider != "" {
 			break
 		}
+	}
+
+	if matchedProvider == "" {
+		domainsStr := strings.Join(csrInfo.Domains, ", ")
+		return &logical.Response{Data: map[string]interface{}{
+			"error":   fmt.Sprintf("no matching DNS role found for domains [%s] — ensure at least one role's zone covers one of the requested domains", domainsStr),
+			"domains": csrInfo.Domains,
+		}}, nil
 	}
 
 

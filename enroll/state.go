@@ -14,8 +14,8 @@ import (
 	"github.com/go-acme/lego/v4/certificate"
 	"github.com/go-acme/lego/v4/lego"
 	"github.com/go-acme/lego/v4/registration"
-	crt "github.com/openbao/dnsacme/crypto"
-	"github.com/openbao/dnsacme/dns"
+	crt "github.com/mikerquinn/dns-acme/crypto"
+	"github.com/mikerquinn/dns-acme/dns"
 )
 
 // acmeUser implements registration.User so lego can manage the ACME account.
@@ -201,7 +201,11 @@ func (i *Issuer) processEnrollment(ctx context.Context, state *EnrollmentState) 
 	}
 	provider, err := i.registry.GetProvider(state.Provider, creds)
 	if err != nil {
-		i.failEnrollment(ctx, state, fmt.Sprintf("failed to get DNS provider: %v", err))
+		if state.Provider == "" {
+			i.failEnrollment(ctx, state, fmt.Sprintf("no matching role found for domain(s) %v — no DNS provider configured", state.Domains))
+		} else {
+			i.failEnrollment(ctx, state, fmt.Sprintf("failed to get DNS provider: %v", err))
+		}
 		return
 	}
 

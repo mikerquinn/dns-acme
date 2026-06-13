@@ -1,4 +1,4 @@
-module github.com/openbao/dnsacme
+module github.com/mikerquinn/dns-acme
 
 go 1.24.0
 
