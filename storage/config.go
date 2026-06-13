@@ -10,21 +10,20 @@ import (
 const (
 	configKeyACMEEmail = "config/acme_email"
 	configKeyACMEKey   = "config/acme_key"
-	configKeyRoles     = "config/roles/"
 )
 
 // ACMEAccount stores the ACME account configuration.
 type ACMEAccount struct {
 	Email string `json:"email"`
-	Key   string `json:"key"` // PEM-encoded private key
+	Key   string `json:"key"`
 }
 
 // DNSRole stores DNS provider configuration for a role.
 type DNSRole struct {
-	Name        string                 `json:"name"`      // DNS provider name (e.g., "aws", "cloudflare")
-	Provider    string                 `json:"provider"`  // Lego provider name
-	Credentials map[string]interface{} `json:"credentials"` // Provider-specific credentials
-	Zone        string                 `json:"zone"`      // DNS zone identifier (e.g., Cloudflare zone ID, Route53 hosted zone)
+	Name        string                 `json:"name"`
+	Provider    string                 `json:"provider"`
+	Credentials map[string]interface{} `json:"credentials"`
+	Zone        string                 `json:"zone"`
 }
 
 // ConfigStorage wraps StorageBackend with configuration-specific methods.
@@ -68,14 +67,13 @@ func (s *ConfigStorage) SetACMEAccount(ctx context.Context, account *ACMEAccount
 
 // ListRoles returns all DNS role names.
 func (s *ConfigStorage) ListRoles(ctx context.Context) ([]string, error) {
-	keys, err := s.backend.List(ctx, configKeyRoles)
+	keys, err := s.backend.List(ctx, "config/role/")
 	if err != nil {
 		return nil, fmt.Errorf("failed to list roles: %w", err)
 	}
 
 	var roles []string
 	for _, key := range keys {
-		// OpenBao's List returns keys relative to the prefix, so we use them directly
 		if key != "" {
 			roles = append(roles, key)
 		}
@@ -86,7 +84,7 @@ func (s *ConfigStorage) ListRoles(ctx context.Context) ([]string, error) {
 
 // GetRole retrieves a DNS role by name.
 func (s *ConfigStorage) GetRole(ctx context.Context, name string) (*DNSRole, error) {
-	key := configKeyRoles + name
+	key := "config/role/" + name
 	data, err := s.backend.Get(ctx, key)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get role %s: %w", name, err)
@@ -102,7 +100,7 @@ func (s *ConfigStorage) GetRole(ctx context.Context, name string) (*DNSRole, err
 
 // SetRole stores a DNS role.
 func (s *ConfigStorage) SetRole(ctx context.Context, role *DNSRole) error {
-	key := configKeyRoles + role.Name
+	key := "config/role/" + role.Name
 	data, err := json.Marshal(role)
 	if err != nil {
 		return fmt.Errorf("failed to marshal role: %w", err)
@@ -112,5 +110,5 @@ func (s *ConfigStorage) SetRole(ctx context.Context, role *DNSRole) error {
 
 // DeleteRole removes a DNS role.
 func (s *ConfigStorage) DeleteRole(ctx context.Context, name string) error {
-	return s.backend.Delete(ctx, configKeyRoles+name)
+	return s.backend.Delete(ctx, "config/role/"+name)
 }

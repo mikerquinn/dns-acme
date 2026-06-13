@@ -5,17 +5,15 @@ import (
 	"context"
 	"sync"
 
+	"github.com/go-acme/lego/v4/certcrypto"
+	"github.com/go-acme/lego/v4/lego"
 	"github.com/hashicorp/go-hclog"
-	"github.com/openbao/openbao/sdk/v2/logical"
-	pb "github.com/openbao/openbao/sdk/v2/plugin"
 	"github.com/mikerquinn/dns-acme/dns"
 	"github.com/mikerquinn/dns-acme/enroll"
 	"github.com/mikerquinn/dns-acme/storage"
 )
 
-// --- Plugin implementation ---
-
-// Plugin is the main plugin struct containing all state.
+// Plugin is the main plugin struct containing all shared state.
 type Plugin struct {
 	logger hclog.Logger
 
@@ -26,7 +24,7 @@ type Plugin struct {
 	configStore *storage.ConfigStorage
 	enrollStore *enroll.EnrollmentStorage
 
-	// ACME state
+	// ACME account state (lazy-loaded from storage)
 	acmeEmail  string
 	acmeKeyPEM string
 	acmeURL    string
@@ -34,8 +32,8 @@ type Plugin struct {
 	// Issuer
 	issuer *enroll.Issuer
 
-	// Lock for ACME operations
-	mu sync.Mutex
+	// Lock for ACME operations and client recreation
+	mu sync.RWMutex
 }
 
 // NewPlugin creates a new plugin instance.
@@ -62,40 +60,55 @@ func (p *Plugin) Init(ctx context.Context, backend storage.StorageBackend) {
 	p.issuer = enroll.NewIssuer(p.enrollStore, p.registry)
 }
 
-func main() {
-	logger := hclog.New(&hclog.LoggerOptions{
-		Name:       "dnsacme",
-		Level:      hclog.Trace,
-		Output:     hclog.DefaultOutput,
-		JSONFormat: true,
-	})
-
-	logger.Info("DNS-01 ACME plugin starting in native plugin mode")
-	impl := buildPlugin(logger)
-	pb.ServeMultiplex(&pb.ServeOpts{
-		BackendFactoryFunc: func(ctx context.Context, config *logical.BackendConfig) (logical.Backend, error) {
-			if impl.configStore == nil {
-				impl.Init(ctx, &openbaoStorageView{storage: config.StorageView})
-			}
-			return &dnsacmeBackend{Plugin: impl, logger: logger}, nil
-		},
-		Logger: logger,
-	})
+// reset clears all cached state (used by Invalidate callback).
+func (p *Plugin) reset() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.acmeEmail = ""
+	p.acmeKeyPEM = ""
+	p.acmeURL = ""
 }
 
-func buildPlugin(logger hclog.Logger) *Plugin {
-	impl := NewPlugin(logger)
+// acmeClient builds a lego ACME client from stored configuration.
+func (p *Plugin) acmeClient(ctx context.Context) (*lego.Client, error) {
+	p.mu.RLock()
+	email := p.acmeEmail
+	keyPEM := p.acmeKeyPEM
+	url := p.acmeURL
+	p.mu.RUnlock()
 
-	// Register the lego provider factory under all known lego provider names.
-	// This allows any lego-supported DNS provider (cloudflare, route53, etc.)
-	// to be used by referencing the provider name in the role config.
-	factory := &dns.LegoProviderFactory{}
-	for _, name := range dns.ListSupportedProviders() {
-		impl.registry.Register(name, factory)
+	if email == "" || keyPEM == "" {
+		// Lazy load from config store
+		if p.configStore == nil {
+			return nil, nil
+		}
+		account, err := p.configStore.GetACMEAccount(ctx)
+		if err != nil {
+			return nil, nil
+		}
+		email = account.Email
+		keyPEM = account.Key
 	}
 
-	// Store logger reference for backend use
-	impl.logger = logger
+	if email == "" || keyPEM == "" {
+		return nil, nil
+	}
 
-	return impl
+	key, err := parseKey([]byte(keyPEM))
+	if err != nil {
+		return nil, err
+	}
+
+	user := &acmeUser{email: email, privateKey: key, reg: nil}
+
+	if url == "" {
+		url = defaultACMEURL
+	}
+
+	config := lego.NewConfig(user)
+	config.CADirURL = url
+	config.Certificate.KeyType = certcrypto.RSA2048
+	config.UserAgent = "openbao-dnsacme-plugin"
+
+	return lego.NewClient(config)
 }

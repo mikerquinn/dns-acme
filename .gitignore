@@ -1,3 +1,5 @@
 *.so
 *.exe
 dnsacme-plugin
+
+dnsacme
