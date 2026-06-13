@@ -6,7 +6,6 @@ import (
 	"sync"
 
 	"github.com/hashicorp/go-hclog"
-	"github.com/hashicorp/go-plugin"
 	"github.com/openbao/openbao/sdk/v2/logical"
 	pb "github.com/openbao/openbao/sdk/v2/plugin"
 	"github.com/mikerquinn/dns-acme/dns"
@@ -73,47 +72,14 @@ func main() {
 
 	logger.Info("DNS-01 ACME plugin starting in native plugin mode")
 	impl := buildPlugin(logger)
-	plugin.Serve(&plugin.ServeConfig{
-		HandshakeConfig: plugin.HandshakeConfig{
-			MagicCookieKey:   "VAULT_BACKEND_PLUGIN",
-			MagicCookieValue: "6669da05-b1c8-4f49-97d9-c8e5bed98e20",
+	pb.ServeMultiplex(&pb.ServeOpts{
+		BackendFactoryFunc: func(ctx context.Context, config *logical.BackendConfig) (logical.Backend, error) {
+			if impl.configStore == nil {
+				impl.Init(ctx, &openbaoStorageView{storage: config.StorageView})
+			}
+			return &dnsacmeBackend{Plugin: impl, logger: logger}, nil
 		},
-		VersionedPlugins: map[int]plugin.PluginSet{
-			3: {
-				"backend": &pb.GRPCBackendPlugin{
-					Factory: func(ctx context.Context, config *logical.BackendConfig) (logical.Backend, error) {
-						if impl.configStore == nil {
-							impl.Init(ctx, &openbaoStorageView{storage: config.StorageView})
-						}
-						return &dnsacmeBackend{Plugin: impl, logger: logger}, nil
-					},
-					Logger: logger,
-				},
-			},
-			4: {
-				"backend": &pb.GRPCBackendPlugin{
-					Factory: func(ctx context.Context, config *logical.BackendConfig) (logical.Backend, error) {
-						if impl.configStore == nil {
-							impl.Init(ctx, &openbaoStorageView{storage: config.StorageView})
-						}
-						return &dnsacmeBackend{Plugin: impl, logger: logger}, nil
-					},
-					Logger: logger,
-				},
-			},
-			5: {
-				"backend": &pb.GRPCBackendPlugin{
-					Factory: func(ctx context.Context, config *logical.BackendConfig) (logical.Backend, error) {
-						if impl.configStore == nil {
-							impl.Init(ctx, &openbaoStorageView{storage: config.StorageView})
-						}
-						return &dnsacmeBackend{Plugin: impl, logger: logger}, nil
-					},
-					Logger: logger,
-				},
-			},
-		},
-		GRPCServer: plugin.DefaultGRPCServer,
+		Logger: logger,
 	})
 }
 
