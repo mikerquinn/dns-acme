@@ -10,12 +10,14 @@ import (
 const (
 	configKeyACMEEmail = "config/acme_email"
 	configKeyACMEKey   = "config/acme_key"
+	configKeyACMEURL   = "config/acme_url"
 )
 
 // ACMEAccount stores the ACME account configuration.
 type ACMEAccount struct {
 	Email string `json:"email"`
 	Key   string `json:"key"`
+	URL   string `json:"url"`
 }
 
 // DNSRole stores DNS provider configuration for a role.
@@ -48,10 +50,16 @@ func (s *ConfigStorage) GetACMEAccount(ctx context.Context) (*ACMEAccount, error
 		return nil, fmt.Errorf("failed to get ACME key: %w", err)
 	}
 
-	return &ACMEAccount{
-		Email: string(emailData),
-		Key:   string(keyData),
-	}, nil
+	var account ACMEAccount
+	account.Email = string(emailData)
+	account.Key = string(keyData)
+
+	urlData, err := s.backend.Get(ctx, configKeyACMEURL)
+	if err == nil && len(urlData) > 0 {
+		account.URL = string(urlData)
+	}
+
+	return &account, nil
 }
 
 // SetACMEAccount stores the ACME account configuration.
@@ -61,6 +69,11 @@ func (s *ConfigStorage) SetACMEAccount(ctx context.Context, account *ACMEAccount
 	}
 	if err := s.backend.Put(ctx, configKeyACMEKey, []byte(account.Key)); err != nil {
 		return fmt.Errorf("failed to set ACME key: %w", err)
+	}
+	if account.URL != "" {
+		if err := s.backend.Put(ctx, configKeyACMEURL, []byte(account.URL)); err != nil {
+			return fmt.Errorf("failed to set ACME URL: %w", err)
+		}
 	}
 	return nil
 }

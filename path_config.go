@@ -13,6 +13,7 @@ import (
 const (
 	configKeyACMEEmail = "config/acme_email"
 	configKeyACMEKey   = "config/acme_key"
+	configKeyACMEURL   = "config/acme_url"
 	configKeyRoles     = "config/role/"
 )
 
@@ -95,9 +96,19 @@ func (b *dnsacmeBackend) pathConfigRead(ctx context.Context, req *logical.Reques
 	if email == "" {
 		return &logical.Response{Data: map[string]interface{}{"error": "ACME account not configured"}}, nil
 	}
+
+	acmeURL := b.acmeURL
+	if acmeURL == "" {
+		entry, err := req.Storage.Get(ctx, configKeyACMEURL)
+		if err == nil && entry != nil {
+			acmeURL = string(entry.Value)
+		}
+	}
+
 	return &logical.Response{
 		Data: map[string]interface{}{
 			"email": email,
+			"acme_url": acmeURL,
 		},
 	}, nil
 }
@@ -164,8 +175,17 @@ func (b *dnsacmeBackend) pathConfigWrite(ctx context.Context, req *logical.Reque
 	// Update plugin state
 	b.acmeEmail = emailStr
 	b.acmeKeyPEM = keyStr
-	if acmeURLStr != "" && acmeURLStr != defaultACMEURL {
+	if acmeURLStr != "" {
 		b.acmeURL = acmeURLStr
+		if err := req.Storage.Put(ctx, &logical.StorageEntry{
+			Key:   configKeyACMEURL,
+			Value: []byte(acmeURLStr),
+		}); err != nil {
+			return &logical.Response{Data: map[string]interface{}{"error": "failed to store ACME URL: " + err.Error()}}, nil
+		}
+	} else {
+		b.acmeURL = ""
+		req.Storage.Delete(ctx, configKeyACMEURL)
 	}
 
 	// Reset client so next invocation picks up new config
@@ -182,6 +202,7 @@ func (b *dnsacmeBackend) pathConfigDelete(ctx context.Context, req *logical.Requ
 	if err := req.Storage.Delete(ctx, configKeyACMEKey); err != nil {
 		return &logical.Response{Data: map[string]interface{}{"error": "failed to delete key: " + err.Error()}}, nil
 	}
+	req.Storage.Delete(ctx, configKeyACMEURL)
 
 	b.reset()
 

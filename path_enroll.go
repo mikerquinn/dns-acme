@@ -96,6 +96,11 @@ func (b *dnsacmeBackend) pathEnroll(ctx context.Context, req *logical.Request, d
 	acmeURLStr, _ := acmeURL.(string)
 	acmeEmailStr, _ := acmeEmail.(string)
 
+	// Fall back to backend's configured ACME URL if not provided
+	if acmeURLStr == "" {
+		acmeURLStr = b.acmeURL
+	}
+
 	// Try to base64 decode if the CSR looks like base64 (no PEM headers)
 	csrPEMOut := csrPEM
 	if !strings.Contains(csrPEMOut, "-----") {

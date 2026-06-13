@@ -88,6 +88,9 @@ func (p *Plugin) acmeClient(ctx context.Context) (*lego.Client, error) {
 		}
 		email = account.Email
 		keyPEM = account.Key
+		if account.URL != "" {
+			url = account.URL
+		}
 	}
 
 	if email == "" || keyPEM == "" {
