@@ -61,7 +61,7 @@ The following paths are available on the mounted secrets engine:
 | Path | Operation | Description |
 |---|---|---|
 | **<PATH>/config/create** | `bao write` | Create ACME account with generated RSA-2048 key |
-| **<PATH>/config** | `bao read` | Read current ACME account email |
+| **<PATH>/config** | `bao read`/`bao write` | Read or set ACME account email and key |
 | **<PATH>/config/roles** | `bao list`/`bao read` | List configured DNS roles |
 | **<PATH>/config/roles/**`<NAME>`** | `bao write`/`bao read`/`bao delete` | Create, read, or delete a DNS role |
 | **<PATH>/enroll/new** | `bao write` | Enroll a CSR for certificate issuance |
@@ -103,6 +103,15 @@ Retrieves the current ACME account configuration (email only).
 ```bash
 bao read dnsplugin/config
 ```
+
+This path also accepts a write/update operation to set the ACME account
+credentials directly. When using this form, both `email` and `key` are required.
+
+| Parameter | Type | Description |
+|---|---|---|
+| **email** / **acme_email** | string | ACME account email |
+| **key** / **acme_key** | string | ACME account private key (PEM format) |
+| **acme_url** | string | ACME directory URL |
 
 ### config/roles
 
@@ -197,7 +206,7 @@ certificate bundle is included.
 | **completed** | `id`, `state`, `domains`, `certificate` (PEM bundle), `issued_at`, `not_after`, `message` |
 | **pending** / **in_progress** | `id`, `state`, `domains`, `message` |
 | **error** | `id`, `state`, `domains`, `error` |
-| **cancelled** | `id`, `state`, `domains`, `message` |
+| **cancelled** | `id`, `state`, `domains` |
 
 ### enroll/retrieve
 
@@ -222,7 +231,8 @@ a pending enrollment.
 | Output Field | Type | Description |
 |---|---|---|
 | **message** | string | Confirmation string |
-| **serial** | string | Certificate serial number |
+| **serial** | string | Certificate serial number — only present when revoking by certificate |
+| **domains** | []string | Domains of the cancelled enrollment — only present when revoking by enrollment ID |
 
 ```bash
 bao write dnsplugin/revoke certificate=<CERT_PEM>
@@ -257,7 +267,8 @@ subdomain of it (e.g. zone `example.com` matches `foo.example.com`). This
 replaces the former `allowed_names` glob pattern mechanism.
 
 The zone is **not** a permissions mechanism — the entity's `allowed_domains`
-metadata attribute is the only authorization check.
+metadata attribute is the only authorization check. (The former `allowed_names`
+glob pattern on roles was removed in v1.0.1.)
 
 ### Provider Credential Mapping
 
@@ -552,6 +563,8 @@ DNS-01 challenge resolution across 100+ DNS providers.
 
 - Immediate error on `enroll/new` when no matching role is found (previously created a `pending` enrollment that errored on polling)
 - Improved error messages for no-matching-role and unknown-provider cases
+- Removed memory storage backend — OpenBao storage is the only backend
+- Removed `allowed_names` glob pattern on roles; zone-based matching and entity metadata are the only authorization methods
 
 ### v1.0 — June 7, 2026
 
@@ -559,4 +572,4 @@ Initial release.
 
 ## VERSION
 
-This document describes version 1.0.1 of the dns-acme plugin for OpenBao.
+This document describes version 1.0.2 of the dns-acme plugin for OpenBao.
