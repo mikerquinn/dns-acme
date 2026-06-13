@@ -10,6 +10,8 @@ import (
 	"github.com/hashicorp/go-hclog"
 	"github.com/openbao/openbao/sdk/v2/framework"
 	"github.com/openbao/openbao/sdk/v2/logical"
+
+	"github.com/mikerquinn/dns-acme/storage"
 )
 
 // Factory returns a new backend as logical.Backend.
@@ -56,17 +58,11 @@ func backend() *dnsacmeBackend {
 				"config/role/*",
 			},
 		},
-		BackendType:    logical.TypeLogical,
-		InitializeFunc: b.frameworkInitialize,
-		Invalidate:     b.invalidate,
+		BackendType: logical.TypeLogical,
+		Invalidate:  b.invalidate,
 	}
 
 	return b
-}
-
-// frameworkInitialize is called after Setup.
-func (b *dnsacmeBackend) frameworkInitialize(ctx context.Context, req *logical.InitializationRequest) error {
-	return b.Initialize(ctx, req)
 }
 
 // reset clears all cached state (called from Plugin).
@@ -126,18 +122,10 @@ func handleConfigCreate(ctx context.Context, req *logical.Request, d *framework.
 	}
 	user.SetRegistration(reg)
 
-	// Store the account in config storage
-	if err := req.Storage.Put(ctx, &logical.StorageEntry{
-		Key:   configKeyACMEEmail,
-		Value: []byte(emailStr),
-	}); err != nil {
+	// Store the account using the plugin's shared config store (same backend used by enrollment reads)
+	acmeAcc := &storage.ACMEAccount{Email: emailStr, Key: acmeKeyPEM}
+	if err := globalImpl.configStore.SetACMEAccount(ctx, acmeAcc); err != nil {
 		return &logical.Response{Data: map[string]interface{}{"error": "failed to store ACME account: " + err.Error()}}, nil
-	}
-	if err := req.Storage.Put(ctx, &logical.StorageEntry{
-		Key:   configKeyACMEKey,
-		Value: []byte(acmeKeyPEM),
-	}); err != nil {
-		return &logical.Response{Data: map[string]interface{}{"error": "failed to store ACME key: " + err.Error()}}, nil
 	}
 
 	// Update plugin's in-memory state

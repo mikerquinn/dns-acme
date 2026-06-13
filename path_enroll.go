@@ -47,16 +47,20 @@ func pathEnrollNew(b *dnsacmeBackend) *framework.Path {
 				Callback: b.pathEnroll,
 				Summary:  "Enroll a CSR for certificate issuance",
 			},
+			logical.UpdateOperation: &framework.PathOperation{
+				Callback: b.pathEnroll,
+				Summary:  "Enroll a CSR for certificate issuance",
+			},
 		},
 		HelpSynopsis:    pathEnrollNewHelpSynopsis,
 		HelpDescription: pathEnrollNewHelpDescription,
 	}
 }
 
-// pathEnrollRetrieve extends the API with a `/enroll/retrieve` endpoint.
+// pathEnrollRetrieve extends the API with a `/enroll/retrieve/<id>` endpoint.
 func pathEnrollRetrieve(b *dnsacmeBackend) *framework.Path {
 	return &framework.Path{
-		Pattern: "enroll/retrieve/?$",
+		Pattern: "enroll/retrieve/" + framework.GenericNameRegex("id"),
 		Fields: map[string]*framework.FieldSchema{
 			"id": {
 				Type:        framework.TypeString,
@@ -185,7 +189,10 @@ func (b *dnsacmeBackend) pathEnroll(ctx context.Context, req *logical.Request, d
 		return &logical.Response{Data: map[string]interface{}{"error": "failed to create enrollment: " + err.Error()}}, nil
 	}
 
-	if b.issuer != nil {
+	if b.issuer == nil {
+		b.logger.Error("issuer is nil, enrollment will not be processed")
+	} else {
+		b.logger.Info("starting enrollment", "id", enrollmentID)
 		b.issuer.StartEnrollment(ctx, enrollmentID)
 	}
 

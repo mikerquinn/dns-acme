@@ -8,6 +8,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -93,12 +94,22 @@ func (i *Issuer) StartEnrollment(ctx context.Context, id string) {
 			delete(i.active, id)
 			i.mu.Unlock()
 		}()
+		os.WriteFile("/tmp/enroll_debug.log", []byte(fmt.Sprintf("ENROLL: goroutine started for id=%s\n", id)), 0644)
+		fmt.Printf("ENROLL: goroutine started for id=%s\n", id)
 
-		state, err := i.store.GetEnrollment(ctx, id)
+		fmt.Printf("ENROLL: about to get enrollment %s\n", id)
+		os.WriteFile("/tmp/enroll_debug.log", []byte(fmt.Sprintf("ENROLL: about to get enrollment %s\n", id)), 0644)
+
+		state, err := i.store.GetEnrollment(context.Background(), id)
+		fmt.Printf("ENROLL: got enrollment id=%s err=%v\n", id, err)
+		os.WriteFile("/tmp/enroll_debug.log", []byte(fmt.Sprintf("ENROLL: got enrollment id=%s err=%v\n", id, err)), 0644)
 		if err != nil {
 			fmt.Printf("ENROLL: failed to get enrollment %s: %v\n", id, err)
+			os.WriteFile("/tmp/enroll_error.log", []byte(fmt.Sprintf("ENROLL: failed to get enrollment %s: %v\n", id, err)), 0644)
 			return
 		}
+		fmt.Printf("ENROLL: got enrollment state=%s\n", state.State)
+		os.WriteFile("/tmp/enroll_debug.log", []byte(fmt.Sprintf("ENROLL: state=%s\n", state.State)), 0644)
 
 		if state.State != "pending" {
 			fmt.Printf("ENROLL: enrollment %s is not pending (state=%s)\n", id, state.State)
@@ -108,31 +119,36 @@ func (i *Issuer) StartEnrollment(ctx context.Context, id string) {
 		// Mark as in progress
 		state.State = "in_progress"
 		state.UpdatedAt = time.Now()
-		i.store.UpdateEnrollment(ctx, state)
+		i.store.UpdateEnrollment(context.Background(), state)
 
-		i.processEnrollment(ctx, state)
+		i.processEnrollment(context.Background(), state)
 	}()
 }
 
 // processEnrollment performs the ACME DNS-01 challenge for an enrollment.
 func (i *Issuer) processEnrollment(ctx context.Context, state *EnrollmentState) {
+	fmt.Printf("ENROLL: processEnrollment started for id=%s\n", state.ID)
 	// Get ACME account info
 	acmeEmail := state.ACMEEmail
 	if acmeEmail == "" {
 		acmeInfo, err := i.store.GetACMEAccount(ctx)
 		if err != nil {
+			fmt.Printf("ENROLL: failed to get ACME account: %v\n", err)
 			i.failEnrollment(ctx, state, fmt.Sprintf("failed to get ACME account: %v", err))
 			return
 		}
+		fmt.Printf("ENROLL: got ACME email=%s\n", acmeInfo.Email)
 		acmeEmail = acmeInfo.Email
 	}
 
 	// Parse ACME private key
 	acmeKeyData, err := i.store.GetACMEKey(ctx)
 	if err != nil {
+		fmt.Printf("ENROLL: failed to get ACME key: %v\n", err)
 		i.failEnrollment(ctx, state, fmt.Sprintf("failed to get ACME key: %v", err))
 		return
 	}
+	fmt.Printf("ENROLL: got ACME key, len=%d\n", len(acmeKeyData))
 
 	block, _ := pem.Decode([]byte(acmeKeyData))
 	if block == nil {
@@ -258,6 +274,7 @@ func (i *Issuer) processEnrollment(ctx context.Context, state *EnrollmentState) 
 	state.NotAfter = parsedCert.NotAfter
 	state.UpdatedAt = time.Now()
 	i.store.UpdateEnrollment(ctx, state)
+	os.WriteFile("/tmp/enroll_complete.log", []byte(fmt.Sprintf("ENROLL: completed id=%s\n", state.ID)), 0644)
 }
 
 func (i *Issuer) failEnrollment(ctx context.Context, state *EnrollmentState, errMsg string) {
@@ -265,6 +282,7 @@ func (i *Issuer) failEnrollment(ctx context.Context, state *EnrollmentState, err
 	state.Error = errMsg
 	state.UpdatedAt = time.Now()
 	i.store.UpdateEnrollment(ctx, state)
+	os.WriteFile("/tmp/enroll_error.log", []byte(fmt.Sprintf("ENROLL: failed id=%s err=%s\n", state.ID, errMsg)), 0644)
 }
 
 // dns01ProviderWrapper adapts our DNS provider to lego's dns01.Provider interface.

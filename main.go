@@ -9,6 +9,9 @@ import (
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
 
+// globalImpl holds the singleton plugin instance across all factory calls.
+var globalImpl *Plugin
+
 func main() {
 	logger := hclog.New(&hclog.LoggerOptions{
 		Name:       "dnsacme",
@@ -20,14 +23,25 @@ func main() {
 	logger.Info("DNS-01 ACME plugin starting in native plugin mode")
 
 	// Build the plugin with registered providers
-	impl := buildPlugin(logger)
+	globalImpl = buildPlugin(logger)
 
 	pb.ServeMultiplex(&pb.ServeOpts{
 		BackendFactoryFunc: func(ctx context.Context, config *logical.BackendConfig) (logical.Backend, error) {
-			if impl.configStore == nil {
-				impl.Init(ctx, &openbaoStorageView{storage: config.StorageView})
+			// Create a fully initialized backend via backend() so that
+			// *framework.Backend is set (hashicups pattern).
+			b := backend()
+			b.Plugin = globalImpl
+			b.logger = logger
+
+			// Initialize the plugin with storage (lazy, singleton impl)
+			if globalImpl.configStore == nil {
+				globalImpl.Init(ctx, &openbaoStorageView{storage: config.StorageView})
 			}
-			return &dnsacmeBackend{Plugin: impl, logger: logger}, nil
+
+			if err := b.Setup(ctx, config); err != nil {
+				return nil, err
+			}
+			return b, nil
 		},
 		Logger: logger,
 	})
@@ -35,17 +49,17 @@ func main() {
 
 // buildPlugin creates the plugin with all supported DNS providers registered.
 func buildPlugin(logger hclog.Logger) *Plugin {
-	impl := NewPlugin(logger)
+	p := NewPlugin(logger)
 
 	// Register the lego provider factory under all known lego provider names.
 	// This allows any lego-supported DNS provider to be used by referencing
 	// the provider name in the role config.
 	factory := &dns.LegoProviderFactory{}
 	for _, name := range dns.ListSupportedProviders() {
-		impl.registry.Register(name, factory)
+		p.registry.Register(name, factory)
 	}
 
-	return impl
+	return p
 }
 
 // openbaoStorageView wraps logical.Storage as StorageBackend.
