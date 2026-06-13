@@ -49,10 +49,6 @@ func NewPlugin(logger hclog.Logger) *Plugin {
 
 // Init sets up the plugin with storage and issuer.
 func (p *Plugin) Init(ctx context.Context, backend storage.StorageBackend) {
-	if backend == nil {
-		p.logger.Warn("Init called with nil backend, using memory storage")
-		backend = &memoryBackend{}
-	}
 	p.configStore = storage.NewConfigStorage(backend)
 	p.enrollStore = enroll.NewEnrollmentStorage(backend)
 
@@ -66,14 +62,6 @@ func (p *Plugin) Init(ctx context.Context, backend storage.StorageBackend) {
 
 	p.issuer = enroll.NewIssuer(p.enrollStore, p.registry)
 }
-
-// memoryBackend is a minimal in-memory fallback for when OpenBao storage is not yet available.
-type memoryBackend struct{}
-
-func (*memoryBackend) Put(ctx context.Context, key string, value []byte) error            { return nil }
-func (*memoryBackend) Get(ctx context.Context, key string) ([]byte, error)                { return nil, &storage.NotFoundError{Key: key} }
-func (*memoryBackend) Delete(ctx context.Context, key string) error                       { return nil }
-func (*memoryBackend) List(ctx context.Context, prefix string) ([]string, error)          { return nil, nil }
 
 func main() {
 	logger := hclog.New(&hclog.LoggerOptions{
