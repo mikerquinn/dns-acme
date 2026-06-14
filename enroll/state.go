@@ -4,17 +4,19 @@ package enroll
 import (
 	"context"
 	"crypto"
+	"crypto/rsa"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/pem"
 	"fmt"
 	"net/http"
-	"os"
 	"sync"
 	"time"
 
 	"github.com/go-acme/lego/v4/certificate"
 	"github.com/go-acme/lego/v4/lego"
 	"github.com/go-acme/lego/v4/registration"
+	"github.com/hashicorp/go-hclog"
 	crt "github.com/mikerquinn/dns-acme/crypto"
 	"github.com/mikerquinn/dns-acme/dns"
 	"github.com/mikerquinn/dns-acme/storage"
@@ -68,15 +70,17 @@ func NewEnrollmentState(id, csrPEM string, domains []string, acmeURL string) *En
 type Issuer struct {
 	store    *EnrollmentStorage
 	registry *dns.ProviderRegistry
+	logger   hclog.Logger
 	mu       sync.Mutex
 	active   map[string]bool
 }
 
 // NewIssuer creates a new certificate issuer.
-func NewIssuer(store *EnrollmentStorage, registry *dns.ProviderRegistry) *Issuer {
+func NewIssuer(store *EnrollmentStorage, registry *dns.ProviderRegistry, logger hclog.Logger) *Issuer {
 	return &Issuer{
 		store:    store,
 		registry: registry,
+		logger:   logger,
 		active:   make(map[string]bool),
 	}
 }
@@ -97,25 +101,20 @@ func (i *Issuer) StartEnrollment(ctx context.Context, id string) {
 			delete(i.active, id)
 			i.mu.Unlock()
 		}()
-		os.WriteFile("/tmp/enroll_debug.log", []byte(fmt.Sprintf("ENROLL: goroutine started for id=%s\n", id)), 0644)
-		fmt.Printf("ENROLL: goroutine started for id=%s\n", id)
+		i.logger.Info("ENROLL: goroutine started", "id", id)
 
-		fmt.Printf("ENROLL: about to get enrollment %s\n", id)
-		os.WriteFile("/tmp/enroll_debug.log", []byte(fmt.Sprintf("ENROLL: about to get enrollment %s\n", id)), 0644)
+		i.logger.Info("ENROLL: about to get enrollment", "id", id)
 
 		state, err := i.store.GetEnrollment(context.Background(), id)
-		fmt.Printf("ENROLL: got enrollment id=%s err=%v\n", id, err)
-		os.WriteFile("/tmp/enroll_debug.log", []byte(fmt.Sprintf("ENROLL: got enrollment id=%s err=%v\n", id, err)), 0644)
+		i.logger.Info("ENROLL: got enrollment", "id", id, "err", err)
 		if err != nil {
-			fmt.Printf("ENROLL: failed to get enrollment %s: %v\n", id, err)
-			os.WriteFile("/tmp/enroll_error.log", []byte(fmt.Sprintf("ENROLL: failed to get enrollment %s: %v\n", id, err)), 0644)
+			i.logger.Info("ENROLL: failed to get enrollment", "id", id, "err", err)
 			return
 		}
-		fmt.Printf("ENROLL: got enrollment state=%s\n", state.State)
-		os.WriteFile("/tmp/enroll_debug.log", []byte(fmt.Sprintf("ENROLL: state=%s\n", state.State)), 0644)
+		i.logger.Info("ENROLL: got enrollment state", "id", id, "state", state.State)
 
 		if state.State != "pending" {
-			fmt.Printf("ENROLL: enrollment %s is not pending (state=%s)\n", id, state.State)
+			i.logger.Info("ENROLL: enrollment not pending", "id", id, "state", state.State)
 			return
 		}
 
@@ -130,28 +129,28 @@ func (i *Issuer) StartEnrollment(ctx context.Context, id string) {
 
 // processEnrollment performs the ACME DNS-01 challenge for an enrollment.
 func (i *Issuer) processEnrollment(ctx context.Context, state *EnrollmentState) {
-	fmt.Printf("ENROLL: processEnrollment started for id=%s\n", state.ID)
+	i.logger.Info("ENROLL: processEnrollment started", "id", state.ID)
 	// Get ACME account info
 	acmeEmail := state.ACMEEmail
 	if acmeEmail == "" {
-		acmeInfo, err := i.store.GetACMEAccount(ctx)
+			acmeInfo, err := i.store.GetACMEAccount(ctx)
 		if err != nil {
-			fmt.Printf("ENROLL: failed to get ACME account: %v\n", err)
+			i.logger.Info("ENROLL: failed to get ACME account", "id", state.ID, "err", err)
 			i.failEnrollment(ctx, state, fmt.Sprintf("failed to get ACME account: %v", err))
 			return
 		}
-		fmt.Printf("ENROLL: got ACME email=%s\n", acmeInfo.Email)
+		i.logger.Info("ENROLL: got ACME email", "id", state.ID, "email", acmeInfo.Email)
 		acmeEmail = acmeInfo.Email
 	}
 
 	// Parse ACME private key
 	acmeKeyData, err := i.store.GetACMEKey(ctx)
 	if err != nil {
-		fmt.Printf("ENROLL: failed to get ACME key: %v\n", err)
+		i.logger.Info("ENROLL: failed to get ACME key", "id", state.ID, "err", err)
 		i.failEnrollment(ctx, state, fmt.Sprintf("failed to get ACME key: %v", err))
 		return
 	}
-	fmt.Printf("ENROLL: got ACME key, len=%d\n", len(acmeKeyData))
+	i.logger.Info("ENROLL: got ACME key", "id", state.ID, "key_prefix", acmeKeyData[:50], "key_len", len(acmeKeyData))
 
 	block, _ := pem.Decode([]byte(acmeKeyData))
 	if block == nil {
@@ -175,6 +174,10 @@ func (i *Issuer) processEnrollment(ctx context.Context, state *EnrollmentState) 
 		privateKey: privateKey,
 		reg:        nil,
 	}
+	// Log the public key's modulus (first 40 chars of base64) for debugging
+	if rsaPriv, ok := privateKey.(*rsa.PrivateKey); ok {
+		i.logger.Info("ENROLL:ACME key pub_n", "id", state.ID, "pub_n_prefix", base64.StdEncoding.EncodeToString(rsaPriv.N.Bytes())[:40])
+	}
 
 	// Create ACME client
 	acmeURL := state.ACMEURL
@@ -194,6 +197,13 @@ func (i *Issuer) processEnrollment(ctx context.Context, state *EnrollmentState) 
 		return
 	}
 
+	// Load existing URI to preserve it
+	existing, _ := i.store.GetACMEAccount(ctx)
+	uriStr := ""
+	if existing != nil {
+		uriStr = existing.URI
+	}
+
 	// Get or register ACME account
 	reg, err := client.Registration.QueryRegistration()
 	if err != nil {
@@ -207,11 +217,17 @@ func (i *Issuer) processEnrollment(ctx context.Context, state *EnrollmentState) 
 		}
 		// Persist the new account so subsequent enrollments reuse it
 		key, _ := i.store.GetACMEKey(ctx)
+		uriStr = reg.URI
+		i.logger.Info("ENROLL:SetACMEAccount", "id", state.ID, "key_prefix", key[:50], "uri", uriStr)
 		i.store.SetACMEAccount(ctx, &storage.ACMEAccount{
 			Email: user.GetEmail(),
 			Key:   key,
 			URL:   acmeURL,
+			URI:   uriStr,
 		})
+	} else {
+		// Query succeeded - store the registration URI
+		uriStr = reg.URI
 	}
 	// Store registration for future use
 	user.SetRegistration(reg)
@@ -266,7 +282,7 @@ func (i *Issuer) processEnrollment(ctx context.Context, state *EnrollmentState) 
 		return
 	}
 	if len(rest) > 0 {
-		fmt.Printf("ENROLL: stripped %d bytes of intermediate certs\n", len(rest))
+		i.logger.Info("ENROLL: stripped intermediate certs", "id", state.ID, "bytes", len(rest))
 	}
 	parsedCert, err := x509.ParseCertificate(leafBlock.Bytes)
 	if err != nil {
@@ -275,8 +291,7 @@ func (i *Issuer) processEnrollment(ctx context.Context, state *EnrollmentState) 
 	}
 
 	// Log the certificate (OpenBao style)
-	fmt.Printf("ENROLL: certificate issued for domains: %v, expires: %v\n",
-		parsedCert.DNSNames, parsedCert.NotAfter)
+	i.logger.Info("ENROLL: certificate issued", "id", state.ID, "domains", state.Domains, "expires", parsedCert.NotAfter)
 
 	// Update enrollment state
 	state.State = "completed"
@@ -284,7 +299,6 @@ func (i *Issuer) processEnrollment(ctx context.Context, state *EnrollmentState) 
 	state.NotAfter = parsedCert.NotAfter
 	state.UpdatedAt = time.Now()
 	i.store.UpdateEnrollment(ctx, state)
-	os.WriteFile("/tmp/enroll_complete.log", []byte(fmt.Sprintf("ENROLL: completed id=%s\n", state.ID)), 0644)
 }
 
 func (i *Issuer) failEnrollment(ctx context.Context, state *EnrollmentState, errMsg string) {
@@ -292,7 +306,6 @@ func (i *Issuer) failEnrollment(ctx context.Context, state *EnrollmentState, err
 	state.Error = errMsg
 	state.UpdatedAt = time.Now()
 	i.store.UpdateEnrollment(ctx, state)
-	os.WriteFile("/tmp/enroll_error.log", []byte(fmt.Sprintf("ENROLL: failed id=%s err=%s\n", state.ID, errMsg)), 0644)
 }
 
 // dns01ProviderWrapper adapts our DNS provider to lego's dns01.Provider interface.

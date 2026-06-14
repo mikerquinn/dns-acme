@@ -3,9 +3,10 @@ package main
 import (
 	"context"
 	"crypto/x509"
+	"encoding/pem"
+	"fmt"
 	"strings"
 
-	cryptoPkg "github.com/mikerquinn/dns-acme/crypto"
 	"github.com/openbao/openbao/sdk/v2/framework"
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
@@ -30,6 +31,10 @@ func pathRevoke(b *dnsacmeBackend) []*framework.Path {
 				Callback:  b.pathRevoke,
 				Summary:   "Revoke a certificate or cancel a pending enrollment",
 			},
+			logical.UpdateOperation: &framework.PathOperation{
+				Callback:  b.pathRevoke,
+				Summary:   "Revoke a certificate or cancel a pending enrollment",
+			},
 		},
 		HelpSynopsis:    pathRevokeHelpSynopsis,
 		HelpDescription: pathRevokeHelpDescription,
@@ -39,6 +44,9 @@ func pathRevoke(b *dnsacmeBackend) []*framework.Path {
 
 // pathRevoke revokes a certificate or cancels a pending enrollment.
 func (b *dnsacmeBackend) pathRevoke(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+	certRaw, _ := d.Raw["certificate"].(string)
+	idRaw, _ := d.Raw["id"].(string)
+	b.logger.Info("REVOKE", "op", req.Operation, "cert_len", len(certRaw), "id", idRaw)
 	certStr, _ := d.GetOk("certificate")
 	id, _ := d.GetOk("id")
 
@@ -64,14 +72,14 @@ func (b *dnsacmeBackend) pathRevoke(ctx context.Context, req *logical.Request, d
 		return &logical.Response{Data: map[string]interface{}{"error": "certificate or enrollment id is required"}}, nil
 	}
 
-	certParsed, err := cryptoPkg.ParseCertificate([]byte(certStrStr))
-	if err != nil {
-		return &logical.Response{Data: map[string]interface{}{"error": "invalid certificate: " + err.Error()}}, nil
+	// Decode PEM and parse certificate in one step
+	block, _ := pem.Decode([]byte(certStrStr))
+	if block == nil {
+		return &logical.Response{Data: map[string]interface{}{"error": "failed to decode certificate PEM"}}, nil
 	}
-
-	acmeURL := b.acmeURL
-	if acmeURL == "" {
-		acmeURL = defaultACMEURL
+	certParsed, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return &logical.Response{Data: map[string]interface{}{"error": fmt.Sprintf("failed to parse certificate: %v", err)}}, nil
 	}
 
 	client, err := b.acmeClient(ctx)
@@ -82,19 +90,14 @@ func (b *dnsacmeBackend) pathRevoke(ctx context.Context, req *logical.Request, d
 		return &logical.Response{Data: map[string]interface{}{"error": "ACME account not configured"}}, nil
 	}
 
-	parsedCert, err := x509.ParseCertificate([]byte(certStrStr))
-	if err != nil {
-		return &logical.Response{Data: map[string]interface{}{"error": "failed to parse certificate: " + err.Error()}}, nil
-	}
-
-	if err := client.Certificate.Revoke(parsedCert.Raw); err != nil {
+	if err := client.Certificate.Revoke([]byte(certStrStr)); err != nil {
 		return &logical.Response{Data: map[string]interface{}{"error": "failed to revoke certificate: " + err.Error()}}, nil
 	}
 
 	return &logical.Response{Data: map[string]interface{}{
-		"message":  "certificate revoked",
-		"serial":   certParsed.SerialNumber.String(),
-		"subject":  strings.Join(certParsed.DNSNames, ", "),
+		"message": "certificate revoked",
+		"serial":  certParsed.SerialNumber.String(),
+		"subject": strings.Join(certParsed.DNSNames, ", "),
 	}}, nil
 }
 

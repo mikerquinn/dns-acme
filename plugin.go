@@ -3,10 +3,12 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/go-acme/lego/v4/certcrypto"
 	"github.com/go-acme/lego/v4/lego"
+	"github.com/go-acme/lego/v4/registration"
 	"github.com/hashicorp/go-hclog"
 	"github.com/mikerquinn/dns-acme/dns"
 	"github.com/mikerquinn/dns-acme/enroll"
@@ -28,6 +30,7 @@ type Plugin struct {
 	acmeEmail  string
 	acmeKeyPEM string
 	acmeURL    string
+	acmeURI    string
 
 	// Issuer
 	issuer *enroll.Issuer
@@ -46,19 +49,24 @@ func NewPlugin(logger hclog.Logger) *Plugin {
 
 // Init sets up the plugin with storage and issuer.
 func (p *Plugin) Init(ctx context.Context, backend storage.StorageBackend) {
-	p.configStore = storage.NewConfigStorage(backend)
-	p.enrollStore = enroll.NewEnrollmentStorage(backend)
+	p.logger.Info("Init called", "backend", fmt.Sprintf("%T", backend))
+	p.configStore = storage.NewConfigStorage(backend, p.logger)
+	p.enrollStore = enroll.NewEnrollmentStorage(backend, p.configStore, p.logger)
 
 	// Try to load ACME account from storage
+	p.logger.Info("checking for ACME account in storage")
 	account, err := p.configStore.GetACMEAccount(ctx)
 	if err == nil {
 		p.acmeEmail = account.Email
 		p.acmeKeyPEM = account.Key
 		p.acmeURL = account.URL
-		p.logger.Info("loaded ACME account from storage")
+		p.logger.Info("loaded ACME account from storage", "key_prefix", account.Key[:50])
+		p.acmeURI = account.URI
+	} else {
+		p.logger.Error("failed to load ACME account from storage", "error", err)
 	}
 
-	p.issuer = enroll.NewIssuer(p.enrollStore, p.registry)
+	p.issuer = enroll.NewIssuer(p.enrollStore, p.registry, p.logger)
 }
 
 // reset clears all cached state (used by Invalidate callback).
@@ -68,6 +76,7 @@ func (p *Plugin) reset() {
 	p.acmeEmail = ""
 	p.acmeKeyPEM = ""
 	p.acmeURL = ""
+	p.acmeURI = ""
 }
 
 // acmeClient builds a lego ACME client from stored configuration.
@@ -76,6 +85,7 @@ func (p *Plugin) acmeClient(ctx context.Context) (*lego.Client, error) {
 	email := p.acmeEmail
 	keyPEM := p.acmeKeyPEM
 	url := p.acmeURL
+	acmeURI := p.acmeURI
 	p.mu.RUnlock()
 
 	if email == "" || keyPEM == "" {
@@ -90,6 +100,7 @@ func (p *Plugin) acmeClient(ctx context.Context) (*lego.Client, error) {
 		email = account.Email
 		keyPEM = account.Key
 		if account.URL != "" {
+			acmeURI = account.URI
 			url = account.URL
 		}
 	}
@@ -103,7 +114,8 @@ func (p *Plugin) acmeClient(ctx context.Context) (*lego.Client, error) {
 		return nil, err
 	}
 
-	user := &acmeUser{email: email, privateKey: key, reg: nil}
+	reg := &registration.Resource{URI: acmeURI}
+	user := &acmeUser{email: email, privateKey: key, reg: reg}
 
 	if url == "" {
 		url = defaultACMEURL

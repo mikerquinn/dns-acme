@@ -63,17 +63,6 @@ func (r *ProviderRegistry) GetProvider(name string, creds map[string]interface{}
 	return factory.NewProvider(creds)
 }
 
-// GetFactory returns the factory for a DNS provider by name.
-func (r *ProviderRegistry) GetFactory(name string) (ProviderFactory, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	factory, ok := r.factories[name]
-	if !ok {
-		return nil, fmt.Errorf("unknown DNS provider: %s", name)
-	}
-	return factory, nil
-}
-
 // ValidateProvider checks if a provider name is registered without creating an instance.
 // This allows storing roles with incomplete credentials — validation happens at enrollment time.
 func (r *ProviderRegistry) ValidateProvider(name string) error {
@@ -86,13 +75,4 @@ func (r *ProviderRegistry) ValidateProvider(name string) error {
 	return nil
 }
 
-// ListProviders returns a list of all registered provider names.
-func (r *ProviderRegistry) ListProviders() []string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	names := make([]string, 0, len(r.factories))
-	for name := range r.factories {
-		names = append(names, name)
-	}
-	return names
-}
+

@@ -10,20 +10,14 @@ import (
 
 // CSRInfo holds information extracted from a CSR.
 type CSRInfo struct {
-	// Domains is the list of domain names requested in the CSR.
-	Domains []string
-
-	// SubjectCN is the Common Name from the CSR subject.
+	Domains   []string
 	SubjectCN string
-
-	// RawBytes is the raw DER-encoded CSR.
-	RawBytes []byte
+	RawBytes  []byte
 }
 
-// ParseCSR parses a PEM-encoded CSR and returns its information.
-// The CSR must be a PKCS#10 certificate signing request.
-func ParseCSR(pemData []byte) (*CSRInfo, error) {
-	block, rest := pem.Decode(pemData)
+// ParseCSRFromString parses a PEM-encoded CSR and returns its information.
+func ParseCSRFromString(csrPEM string) (*CSRInfo, error) {
+	block, rest := pem.Decode([]byte(csrPEM))
 	if block == nil {
 		return nil, fmt.Errorf("failed to decode PEM block")
 	}
@@ -45,18 +39,11 @@ func ParseCSR(pemData []byte) (*CSRInfo, error) {
 		return nil, fmt.Errorf("failed to parse CSR: %w", err)
 	}
 
-	info := &CSRInfo{
-		Domains:    extractDomains(csr),
-		SubjectCN:  csr.Subject.CommonName,
-		RawBytes:   pemData,
-	}
-
-	return info, nil
-}
-
-// ParseCSRFromString parses a CSR from a string (PEM format).
-func ParseCSRFromString(csrPEM string) (*CSRInfo, error) {
-	return ParseCSR([]byte(csrPEM))
+	return &CSRInfo{
+		Domains:   extractDomains(csr),
+		SubjectCN: csr.Subject.CommonName,
+		RawBytes:  []byte(csrPEM),
+	}, nil
 }
 
 // ParseCSRAsX509 parses a CSR from a string (PEM format) and returns the raw *x509.CertificateRequest.
@@ -90,15 +77,6 @@ func extractDomains(csr *x509.CertificateRequest) []string {
 	}
 
 	return result
-}
-
-// ParseCertificate parses a PEM-encoded certificate.
-func ParseCertificate(pemData []byte) (*x509.Certificate, error) {
-	block, _ := pem.Decode(pemData)
-	if block == nil {
-		return nil, fmt.Errorf("failed to decode PEM block")
-	}
-	return x509.ParseCertificate(block.Bytes)
 }
 
 

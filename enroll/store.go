@@ -5,17 +5,20 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/hashicorp/go-hclog"
 	"github.com/mikerquinn/dns-acme/storage"
 )
 
 // EnrollmentStorage wraps storage.Backend with enrollment-specific methods.
 type EnrollmentStorage struct {
-	backend storage.StorageBackend
+	backend     storage.StorageBackend
+	configStore *storage.ConfigStorage
+	logger      hclog.Logger
 }
 
 // NewEnrollmentStorage creates a new enrollment storage wrapper.
-func NewEnrollmentStorage(backend storage.StorageBackend) *EnrollmentStorage {
-	return &EnrollmentStorage{backend: backend}
+func NewEnrollmentStorage(backend storage.StorageBackend, configStore *storage.ConfigStorage, logger hclog.Logger) *EnrollmentStorage {
+	return &EnrollmentStorage{backend: backend, configStore: configStore, logger: logger}
 }
 
 const enrollmentPrefix = "enroll/"
@@ -58,12 +61,12 @@ func (s *EnrollmentStorage) UpdateEnrollment(ctx context.Context, state *Enrollm
 
 // GetACMEAccount retrieves the ACME account configuration.
 func (s *EnrollmentStorage) GetACMEAccount(ctx context.Context) (*storage.ACMEAccount, error) {
-	return storage.NewConfigStorage(s.backend).GetACMEAccount(ctx)
+	return s.configStore.GetACMEAccount(ctx)
 }
 
 // SetACMEAccount stores the ACME account configuration.
 func (s *EnrollmentStorage) SetACMEAccount(ctx context.Context, account *storage.ACMEAccount) error {
-	return storage.NewConfigStorage(s.backend).SetACMEAccount(ctx, account)
+	return s.configStore.SetACMEAccount(ctx, account)
 }
 
 // GetACMEKey retrieves the ACME private key PEM data.

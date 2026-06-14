@@ -123,7 +123,7 @@ func (b *dnsacmeBackend) pathConfigCreate(ctx context.Context, req *logical.Requ
 	user.SetRegistration(reg)
 
 	// Store the account using the plugin's shared config store (same backend used by enrollment reads)
-	acmeAcc := &storage.ACMEAccount{Email: emailStr, Key: acmeKeyPEM, URL: acmeURLStr}
+	acmeAcc := &storage.ACMEAccount{Email: emailStr, Key: acmeKeyPEM, URL: acmeURLStr, URI: reg.URI}
 	if err := b.configStore.SetACMEAccount(ctx, acmeAcc); err != nil {
 		return &logical.Response{Data: map[string]interface{}{"error": "failed to store ACME account: " + err.Error()}}, nil
 	}
@@ -132,6 +132,8 @@ func (b *dnsacmeBackend) pathConfigCreate(ctx context.Context, req *logical.Requ
 	b.acmeEmail = emailStr
 	b.acmeKeyPEM = acmeKeyPEM
 	b.acmeURL = acmeURLStr
+	b.acmeURI = reg.URI
+	b.logger.Info("pathConfigCreate: set in-memory state", "acmeKeyPEM_prefix", acmeKeyPEM[:50], "uri", reg.URI)
 
 	return &logical.Response{Data: map[string]interface{}{
 		"message": "ACME account created and registered",

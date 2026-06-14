@@ -8,6 +8,8 @@ import (
 	"github.com/go-acme/lego/v4/registration"
 	"github.com/openbao/openbao/sdk/v2/framework"
 	"github.com/openbao/openbao/sdk/v2/logical"
+
+	"github.com/mikerquinn/dns-acme/storage"
 )
 
 const (
@@ -154,39 +156,29 @@ func (b *dnsacmeBackend) pathConfigWrite(ctx context.Context, req *logical.Reque
 		}
 	}
 
-	// Store email
-	if err := req.Storage.Put(ctx, &logical.StorageEntry{
-		Key:   configKeyACMEEmail,
-		Value: []byte(emailStr),
-	}); err != nil {
-		return &logical.Response{Data: map[string]interface{}{"error": "failed to store email: " + err.Error()}}, nil
+	// Load existing account to preserve URI
+	existing, _ := b.configStore.GetACMEAccount(ctx)
+	uriStr := ""
+	if existing != nil {
+		uriStr = existing.URI
 	}
 
-	// Store key
-	if keyStr != "" {
-		if err := req.Storage.Put(ctx, &logical.StorageEntry{
-			Key:   configKeyACMEKey,
-			Value: []byte(keyStr),
-		}); err != nil {
-			return &logical.Response{Data: map[string]interface{}{"error": "failed to store key: " + err.Error()}}, nil
-		}
+	// Build the ACME account to store in the shared configStore
+	account := &storage.ACMEAccount{
+		Email: emailStr,
+		Key:   keyStr,
+		URL:   acmeURLStr,
+		URI:   uriStr,
+	}
+	if err := b.configStore.SetACMEAccount(ctx, account); err != nil {
+		return &logical.Response{Data: map[string]interface{}{"error": "failed to store ACME account: " + err.Error()}}, nil
 	}
 
-	// Update plugin state
+	// Update plugin in-memory state
 	b.acmeEmail = emailStr
 	b.acmeKeyPEM = keyStr
-	if acmeURLStr != "" {
-		b.acmeURL = acmeURLStr
-		if err := req.Storage.Put(ctx, &logical.StorageEntry{
-			Key:   configKeyACMEURL,
-			Value: []byte(acmeURLStr),
-		}); err != nil {
-			return &logical.Response{Data: map[string]interface{}{"error": "failed to store ACME URL: " + err.Error()}}, nil
-		}
-	} else {
-		b.acmeURL = ""
-		req.Storage.Delete(ctx, configKeyACMEURL)
-	}
+	b.acmeURL = acmeURLStr
+	b.acmeURI = account.URI
 
 	// Reset client so next invocation picks up new config
 	b.reset()
