@@ -33,14 +33,6 @@ func pathEnrollNew(b *dnsacmeBackend) *framework.Path {
 				Description: "CSR in PEM format (auto-decoded if base64-encoded by the CLI)",
 				Required:    true,
 			},
-			"acme_url": {
-				Type:        framework.TypeString,
-				Description: "Override ACME directory URL for this enrollment only",
-			},
-			"acme_email": {
-				Type:        framework.TypeString,
-				Description: "Override ACME account email for this enrollment only",
-			},
 		},
 		Operations: map[logical.Operation]framework.OperationHandler{
 			logical.CreateOperation: &framework.PathOperation{
@@ -85,21 +77,13 @@ func pathEnrollRetrieve(b *dnsacmeBackend) *framework.Path {
 // pathEnroll creates a new certificate enrollment.
 func (b *dnsacmeBackend) pathEnroll(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
 	csrStr, _ := d.GetOk("csr")
-	acmeURL, _ := d.GetOk("acme_url")
-	acmeEmail, _ := d.GetOk("acme_email")
 
 	csrPEM, ok := csrStr.(string)
 	if !ok || csrPEM == "" {
 		return &logical.Response{Data: map[string]interface{}{"error": "CSR is required"}}, nil
 	}
 
-	acmeURLStr, _ := acmeURL.(string)
-	acmeEmailStr, _ := acmeEmail.(string)
-
-	// Fall back to backend's configured ACME URL if not provided
-	if acmeURLStr == "" {
-		acmeURLStr = b.acmeURL
-	}
+	acmeURLStr := b.acmeURL
 
 	// Try to base64 decode if the CSR looks like base64 (no PEM headers)
 	csrPEMOut := csrPEM
@@ -182,11 +166,6 @@ func (b *dnsacmeBackend) pathEnroll(ctx context.Context, req *logical.Request, d
 
 	enrollmentID := generateID()
 	state := enroll.NewEnrollmentState(enrollmentID, csrPEMOut, csrInfo.Domains, acmeURLStr)
-	if acmeEmailStr != "" {
-		state.ACMEEmail = acmeEmailStr
-	} else {
-		state.ACMEEmail = b.acmeEmail
-	}
 	state.Provider = matchedProvider
 	state.Credentials = matchedCredentials
 
