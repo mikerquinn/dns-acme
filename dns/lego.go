@@ -102,12 +102,9 @@ type LegoProviderFactory struct{}
 //	"zone": (optional) DNS zone identifier (e.g. Cloudflare zone ID, Route53 hosted zone).
 //          Set as the "ZONE" env var, which providers that need explicit zone info will use.
 //
-// Any other string-valued keys are converted to environment variables:
-//
-//   - Keys containing an underscore are used as-is (e.g. "CLOUDFLARE_DNS_API_TOKEN").
-//     This lets admins specify the exact env var names lego expects.
-//   - Keys without an underscore are prefixed with the uppercase provider name
-//     and uppercased (e.g. "api_token" -> "CLOUDFLARE_API_TOKEN").
+// All other string-valued keys are converted to uppercase environment variables
+// as-is (e.g. "CLOUDFLARE_DNS_API_TOKEN" -> "CLOUDFLARE_DNS_API_TOKEN").
+// No auto-prefixing is applied.
 //
 // This supports any DNS provider built into the lego library.
 func (f *LegoProviderFactory) NewProvider(config map[string]interface{}) (Provider, error) {
@@ -117,11 +114,9 @@ func (f *LegoProviderFactory) NewProvider(config map[string]interface{}) (Provid
 	}
 
 	// Collect env vars from config.
-	// Config keys containing an underscore are used directly as env var names
-	// (e.g. "CLOUDFLARE_DNS_API_TOKEN", "aws_access_key_id"), letting role
-	// admins specify exactly the env vars lego expects.
-	// Keys without an underscore are prefixed with the uppercase provider name
-	// and uppercased (e.g. "api_token" -> "CLOUDFLARE_API_TOKEN").
+	// Config keys are converted to uppercase and used directly as env var names.
+	// No auto-prefixing — admins specify the exact env var names lego expects
+	// (e.g. "CLOUDFLARE_DNS_API_TOKEN", "AWS_ACCESS_KEY_ID").
 	type envPair struct {
 		key   string
 		value string
@@ -141,13 +136,7 @@ func (f *LegoProviderFactory) NewProvider(config map[string]interface{}) (Provid
 			continue
 		}
 		if strVal, ok := v.(string); ok && strVal != "" {
-			var envName string
-			if strings.Contains(k, "_") {
-				envName = k
-			} else {
-				envName = strings.ToUpper(providerName) + "_" + strings.ToUpper(k)
-			}
-			envVars = append(envVars, envPair{envName, strVal})
+			envVars = append(envVars, envPair{strings.ToUpper(k), strVal})
 		}
 	}
 

@@ -303,28 +303,24 @@ determines which DNS provider's credentials are used for the challenge.
 ### Provider Credential Mapping
 
 The plugin uses the go-acme/lego library, which expects DNS provider
-credentials as environment variable names. The plugin accepts credentials in
-two forms:
-
-**Form 1: Explicit env var name** (key contains an underscore)
-
-```bash
-CLOUDFLARE_DNS_API_TOKEN=cfut_token
-```
-
-The plugin passes the key directly to lego as-is: `CLOUDFLARE_DNS_API_TOKEN`.
-
-**Form 2: Short key auto-prefixed** (key contains no underscore)
+credentials as environment variable names. The plugin accepts credentials as
+any string-valued keys in the role configuration. Keys are converted to
+uppercase and passed as-is to lego — no auto-prefixing.
 
 ```bash
-api_token=cfut_token
+bao write dnsplugin/config/roles/cloudflare \
+    provider=cloudflare \
+    zone=example.com \
+    CLOUDFLARE_DNS_API_TOKEN=cfut_token
 ```
 
-The plugin auto-prefixes the key with the uppercase provider name:
-`CLOUDFLARE_API_TOKEN`.
+The role key `CLOUDFLARE_DNS_API_TOKEN` becomes the env var
+`CLOUDFLARE_DNS_API_TOKEN`. Use the exact env var names that lego expects
+for each provider.
 
-Form 1 is preferred when the provider name contains multiple words
-(e.g., `CLOUDFLARE_DNS_API_TOKEN` vs `CLOUDFLARE_API_TOKEN`).
+The zone value is set as both `ZONE` and `{PROVIDER}_ZONE` (e.g.
+`CLOUDFLARE_ZONE`) environment variables, which providers that need explicit
+zone identification will use.
 
 ### Supported Providers
 
