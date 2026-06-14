@@ -115,11 +115,15 @@ func (b *dnsacmeBackend) pathEnroll(ctx context.Context, req *logical.Request, d
 		}
 	}
 
-	// Validate entity authorization using authoritative entity metadata
-	if len(entityMetadata) > 0 {
-		if err := b.validateEntityAuthorization(ctx, req, entityMetadata, csrInfo.Domains); err != nil {
-			return &logical.Response{Data: map[string]interface{}{"error": "entity not authorized: " + err.Error()}}, nil
-		}
+	// Validate entity authorization — allowed_domains is required
+	if len(entityMetadata) == 0 {
+		return &logical.Response{Data: map[string]interface{}{"error": "entity metadata not found, ensure the entity has allowed_domains metadata"}}, nil
+	}
+	if allowedDomains, ok := entityMetadata["allowed_domains"]; !ok || allowedDomains == "" {
+		return &logical.Response{Data: map[string]interface{}{"error": "entity metadata missing allowed_domains"}}, nil
+	}
+	if err := b.validateEntityAuthorization(ctx, req, entityMetadata, csrInfo.Domains); err != nil {
+		return &logical.Response{Data: map[string]interface{}{"error": "entity not authorized: " + err.Error()}}, nil
 	}
 
 	// Find matching role by checking if the domain falls within the role's zone
@@ -244,47 +248,20 @@ func (b *dnsacmeBackend) pathEnrollRetrieve(ctx context.Context, req *logical.Re
 // The entity's authoritative metadata is resolved from OpenBao via the entity's token.
 // allowed_domains is a comma-separated list of domains the entity is authorized to enroll for.
 func (b *dnsacmeBackend) validateEntityAuthorization(ctx context.Context, req *logical.Request, metadata map[string]string, domains []string) error {
-	if allowedDomains, ok := metadata["allowed_domains"]; ok && allowedDomains != "" {
-		allowedList := strings.Split(allowedDomains, ",")
-		for _, requested := range domains {
-			found := false
-			for _, allowed := range allowedList {
-				if strings.TrimSpace(allowed) == requested {
-					found = true
-					break
-				}
-			}
-			if !found {
-				return fmt.Errorf("domain %q not in entity's allowed_domains: %s", requested, allowedDomains)
-			}
-		}
-		return nil
-	}
-
-	// Fallback: check role zones
+	allowedDomains := metadata["allowed_domains"]
+	allowedList := strings.Split(allowedDomains, ",")
 	for _, requested := range domains {
-		matched := false
-		roles, err := req.Storage.List(ctx, configKeyRoles)
-		if err != nil {
-			continue
-		}
-
-		for _, roleName := range roles {
-			role, err := b.getRole(ctx, req.Storage, roleName)
-			if err != nil {
-				continue
-			}
-			if zoneMatchesDomain(requested, role.Zone) {
-				matched = true
+		found := false
+		for _, allowed := range allowedList {
+			if strings.TrimSpace(allowed) == requested {
+				found = true
 				break
 			}
 		}
-
-		if !matched {
-			return fmt.Errorf("domain %q does not fall within any DNS provider role zone", requested)
+		if !found {
+			return fmt.Errorf("domain %q not in entity's allowed_domains: %s", requested, allowedDomains)
 		}
 	}
-
 	return nil
 }
 
