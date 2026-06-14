@@ -2,7 +2,7 @@
 
 ## NAME
 
-**dns-acme** — OpenBao DNS-01 ACME certificate issuance plugin with role-based domain authorization
+**dns-acme** — OpenBao DNS-01 ACME certificate issuance plugin with entity-based domain authorization
 
 ## DESCRIPTION
 
@@ -10,16 +10,20 @@
 certificates from any ACME-compatible certificate authority (CA) using the
 DNS-01 challenge mechanism.
 
-Most DNS providers only offer zone-level or account-level API tokens that allow
-DNS record creation for any name within the zone. This plugin adds a role-based
-authorization layer: a role maps a DNS provider credential to a DNS zone. An
-entity that requests a certificate via a CSR must have the requesting domain
-authorized either by the role's **zone** (the domain must equal the zone or be a
-subdomain of it) or by the entity's **allowed_domains** metadata attribute. This
-prevents a server from enrolling for arbitrary names in the zone.
+The plugin uses an **entity-based authorization model**. An admin provisions
+entities and assigns them an `allowed_domains` metadata attribute listing the
+domains each entity is authorized to enroll for. During enrollment the plugin
+resolves the requesting entity's metadata authoritatively from OpenBao via the
+`EntityInfo` RPC — it is not settable by the user in request headers. Every
+CSR domain must be an exact match against the entity's `allowed_domains` list.
+
+The plugin also maps DNS provider credentials to roles by zone. During
+enrollment, each CSR domain is matched against configured roles to find the
+DNS provider and credentials needed to complete the DNS-01 challenge. The first
+role whose zone covers the domain is used.
 
 The plugin maintains its own internal storage for DNS role credentials and
-ACME account state. The issuer runs asynchronously: enrollment requests return
+ACME account state. Issuance runs asynchronously: enrollment requests return
 immediately with a pending status, and the client polls the retrieve endpoint
 until the certificate is issued.
 
@@ -27,7 +31,7 @@ until the certificate is issued.
 
 **bao secrets enable** `-path=<PATH>` `-plugin-name=<NAME>` `plugin`
 
-**bao write** **<PATH>/config/create** `acme_email=`**`<EMAIL>`** `acme_url=`**`<URL>`**
+**bao write** **<PATH>/config/create** `email=`**`<EMAIL>`** `acme_url=`**`<URL>`**
 
 **bao write** **<PATH>/config/roles/**`<NAME>`** `provider=`**`<PROVIDER>`** `zone=`**`<ZONE>`** `...`**`<CREDENTIALS>`**
 
@@ -69,36 +73,36 @@ The following paths are available on the mounted secrets engine:
 | **<PATH>/enroll/retrieve** | `bao write` | Poll enrollment status (ID in body) |
 | **<PATH>/revoke** | `bao write` | Revoke a certificate or cancel a pending enrollment |
 
-All paths support both `bao write` (data-based) and `bao read` (retrieval)
-operations through the OpenBao key-value interface.
-
 ## CONFIGURATION PATHS
 
 ### config/create
 
 Creates an ACME account with a generated RSA-2048 keypair and registers it
-with the ACME CA.
+with the ACME CA. The account URI is stored in plugin config and reused
+for subsequent operations, including certificate revocation (the URI is sent
+as the JWS `kid` header so Let's Encrypt staging accepts the revocation).
 
 | Parameter | Type | Description |
 |---|---|---|
-| **email** / **acme_email** | string | ACME account email address (required; CA may require it) |
+| **email** | string | ACME account email address (required; CA may require it) |
 | **acme_url** | string | ACME directory URL (defaults to Let's Encrypt production) |
 
 | Output Field | Type | Description |
 |---|---|---|
 | **email** | string | The registered email |
 | **key** | string | The generated private key in PEM format |
-| **uri** | string | ACME account URI |
+| **uri** | string | ACME account URI (e.g. `https://acme-staging-v02.api.letsencrypt.org/acme/acct/12345`) |
 | **message** | string | Confirmation string |
 
 ```bash
-bao write dnsplugin/config/create acme_email=certs@example.com
-bao write dnsplugin/config/create acme_email=certs@example.com acme_url=https://acme-staging-v02.api.letsencrypt.org/directory
+bao write dnsplugin/config/create \
+    email=certs@example.com \
+    acme_url=https://acme-staging-v02.api.letsencrypt.org/directory
 ```
 
 ### config
 
-Retrieves the current ACME account configuration (email only).
+Retrieves the current ACME account configuration.
 
 ```bash
 bao read dnsplugin/config
@@ -106,12 +110,6 @@ bao read dnsplugin/config
 
 This path also accepts a write/update operation to set the ACME account
 credentials directly. When using this form, both `email` and `key` are required.
-
-| Parameter | Type | Description |
-|---|---|---|
-| **email** / **acme_email** | string | ACME account email |
-| **key** / **acme_key** | string | ACME account private key (PEM format) |
-| **acme_url** | string | ACME directory URL |
 
 ### config/roles
 
@@ -129,7 +127,7 @@ name, credential set, and DNS zone to a set of credentials.
 | Parameter | Type | Description |
 |---|---|---|
 | **provider** | string | DNS provider name (e.g. `cloudflare`, `route53`, `gandi`). Any provider supported by go-acme/lego is valid. |
-| **zone** | string | DNS zone the API key controls (e.g. `example.com`, `staging.example.com`). Required. The API key must have permissions for this zone and all subdomains. Passed to lego as the `ZONE` and `{PROVIDER}_ZONE` env vars. |
+| **zone** | string | DNS zone the API key controls (e.g. `example.com`). Required. The API key must have permissions for this zone and all subdomains. Passed to lego as the `ZONE` and `{PROVIDER}_ZONE` env vars. |
 | **`<CREDENTIALS>`** | map | One or more provider-specific credential keys. See [Provider Credential Mapping](#provider-credential-mapping). |
 
 | Output Field | Type | Description |
@@ -169,16 +167,14 @@ role wins — register narrower zones before broader ones to override.
 
 Enrolls a CSR for certificate issuance. The CSR is parsed to extract
 domain names from its Subject Alternative Name (SAN) extension (or Common Name
-fallback). Each domain is matched against configured role zones — the first role
-whose zone equals the domain or is a parent of it wins. If no matching role is
-found, enrollment fails immediately with an error. If a role is found, the DNS-01
-challenge is initiated asynchronously.
+fallback). Each domain is then matched against configured role zones — the
+first role whose zone covers the domain determines the DNS provider and
+credentials. The CSR domains are also validated against the requesting
+entity's authoritative `allowed_domains` metadata attribute (see below).
 
 | Parameter | Type | Description |
 |---|---|---|
 | **csr** | string | CSR in PEM format (auto-decoded if base64-encoded by the CLI) |
-| **acme_url** | string | Override ACME directory URL for this enrollment only |
-| **acme_email** | string | Override the ACME account email for this enrollment only |
 
 | Output Field | Type | Description |
 |---|---|---|
@@ -187,13 +183,45 @@ challenge is initiated asynchronously.
 | **domains** | []string | List of domains from the CSR |
 | **message** | string | Human-readable status — present only on success |
 | **retrieve_url** | string | URL to poll for completion — present only on success |
-| **error** | string | Error message — present when no matching role is found for the requested domains |
+| **error** | string | Error message — present when no matching role or entity authorization fails |
 
-Entity authorization is applied when the request includes entity headers
-(`X-Entity-Id`, `X-Entity-Metadata`, `X-Entity-Domain`). Authorization is
-checked against either the entity's `allowed_domains` metadata attribute (exact
-match) or against all role zones (zone-hierarchy match). In dev CLI mode (no
-entity context), authorization is skipped.
+#### Entity Authorization
+
+The plugin resolves the entity's metadata authoritatively from OpenBao via the
+`EntityInfo` RPC. The entity ID is extracted from the token attached to the
+request (`req.EntityID`), and the plugin calls `b.System().EntityInfo(entityID)`
+to fetch the entity record, including its `Metadata` map.
+
+**`allowed_domains` is required.** If the entity has no metadata, or the
+metadata does not include the `allowed_domains` key, enrollment fails
+immediately. There is **no fallback** to role zone matching for authorization.
+
+| Field | Type | Description |
+|---|---|---|
+| `allowed_domains` | string | Comma-separated list of domain names the entity is authorized to enroll for |
+
+Each CSR domain must be an **exact match** against one entry in `allowed_domains`.
+Subdomains are not matched by wildcard (e.g. `allowed_domains=foo.example.com`
+matches `foo.example.com` but not `sub.foo.example.com`).
+
+```bash
+# Set allowed_domains on an entity
+bao write identity/entity name=app-server \
+    metadata.allowed_domains=www.example.com,api.example.com
+
+# Create an entity alias and token role
+bao write identity/entity-alias \
+    name=app-server-alias \
+    mount_accessor=auth_token_xxx \
+    canonical_id=<ENTITY_ID>
+
+curl -X POST http://127.0.0.1:8200/v1/auth/token/roles/app-role \
+  -d '{"allowed_entity_aliases":["app-server-alias"]}'
+
+# Get a token for the entity
+curl -X POST http://127.0.0.1:8200/v1/auth/token/create/app-role \
+  -d '{"entity_alias":"app-server-alias"}'
+```
 
 ### enroll/retrieve/**`<ID>`**
 
@@ -223,6 +251,11 @@ bao write dnsplugin/enroll/retrieve id=<ID>
 Revokes a certificate by sending a revoke request to the ACME CA, or cancels
 a pending enrollment.
 
+The plugin stores the ACME account URI from the initial `config/create`
+registration. When revoking, the account URI is passed to the lego ACME
+client, which includes it as the JWS `kid` header. Let's Encrypt staging
+requires this header (rather than embedding the account JWK) for revocation.
+
 | Parameter | Type | Description |
 |---|---|---|
 | **certificate** | string | PEM-encoded certificate to revoke |
@@ -235,7 +268,7 @@ a pending enrollment.
 | **domains** | []string | Domains of the cancelled enrollment — only present when revoking by enrollment ID |
 
 ```bash
-bao write dnsplugin/revoke certificate=<CERT_PEM>
+bao write dnsplugin/revoke certificate="$(cat /tmp/server.crt)"
 bao write dnsplugin/revoke id=<ENROLLMENT_ID>
 ```
 
@@ -244,13 +277,14 @@ bao write dnsplugin/revoke id=<ENROLLMENT_ID>
 ### ACME Account Setup
 
 The ACME account holds the private key used to communicate with the CA. The
-plugin generates a fresh RSA-2048 key on each `config/create` call. If the
-plugin is restarted (e.g. OpenBao dev container with inmem storage), the
-account must be recreated.
+plugin generates a fresh RSA-2048 key on each `config/create` call and stores
+the account URI for use during revocation. If the plugin is restarted with
+persistent storage, the ACME account (email, key, and URI) is loaded
+automatically.
 
 ```bash
 bao write dnsplugin/config/create \
-    acme_email=certificates@example.com \
+    email=certificates@example.com \
     acme_url=https://acme-staging-v02.api.letsencrypt.org/directory
 ```
 
@@ -264,11 +298,7 @@ the zone from the domain automatically and ignore it.
 
 During enrollment, a domain matches a role if the domain equals the zone or is a
 subdomain of it (e.g. zone `example.com` matches `foo.example.com`). This
-replaces the former `allowed_names` glob pattern mechanism.
-
-The zone is **not** a permissions mechanism — the entity's `allowed_domains`
-metadata attribute is the only authorization check. (The former `allowed_names`
-glob pattern on roles was removed in v1.0.1.)
+determines which DNS provider's credentials are used for the challenge.
 
 ### Provider Credential Mapping
 
@@ -319,23 +349,24 @@ Only DNS names are included; IP addresses are ignored.
 
 The certificate issuance flow is asynchronous:
 
-1. Entity sends CSR via `enroll/new`
-2. Plugin extracts domain names from the CSR's SAN/CN
-3. Each domain is matched against configured role zones (domain equals zone or is a subdomain)
-4. If no matching role is found, the request fails immediately with an error
-5. The first matching role determines the DNS provider and credentials
-6. DNS-01 challenge is initiated via the matched provider
-7. Plugin returns immediately with enrollment ID and pending state
-8. Plugin polls the CA until the challenge is complete
-9. Plugin stores the issued certificate
-10. Entity polls `enroll/retrieve/<ID>` until state is `completed`
+1. Entity sends CSR via `enroll/new` with its entity token
+2. Plugin resolves the entity's metadata from OpenBao via `EntityInfo` RPC
+3. Plugin verifies `allowed_domains` is set and each CSR domain is in the list
+4. Plugin extracts domain names from the CSR's SAN/CN
+5. Each domain is matched against configured role zones to find the DNS provider
+6. The first matching role determines the provider and credentials
+7. DNS-01 challenge is initiated via the matched provider
+8. Plugin returns immediately with enrollment ID and pending state
+9. Plugin polls the CA until the challenge is complete
+10. Plugin stores the issued certificate and ACME account URI
+11. Entity polls `enroll/retrieve/<ID>` until state is `completed`
 
 Typical total time: 30–120 seconds depending on DNS propagation and CA
 processing speed.
 
 ## EXAMPLES
 
-### Full Workflow
+### Full Workflow with Entity Authorization
 
 ```bash
 # 1. Generate a CSR
@@ -343,11 +374,11 @@ openssl req -new -newkey rsa:2048 -nodes \
     -keyout /tmp/server.key \
     -out /tmp/server.csr \
     -subj "/CN=www.example.com" \
-    -addext "subjectAltName=DNS:www.example.com,DNS:mail.example.com"
+    -addext "subjectAltName=DNS:www.example.com"
 
 # 2. Create an ACME account
 bao write dnsplugin/config/create \
-    acme_email=certs@example.com \
+    email=certs@example.com \
     acme_url=https://acme-staging-v02.api.letsencrypt.org/directory
 
 # 3. Create a DNS role
@@ -356,38 +387,59 @@ bao write dnsplugin/config/roles/cloudflare \
     zone=example.com \
     CLOUDFLARE_DNS_API_TOKEN=cfut_mQ40...
 
-# 4. Enroll the CSR
-CSR=$(base64 -w 0 /tmp/server.csr)
-bao write dnsplugin/enroll/new csr="$CSR"
+# 4. Provision an entity with allowed_domains
+bao write identity/entity name=web-server \
+    metadata.allowed_domains=www.example.com
 
-# 5. Poll for completion (repeat until state is "completed")
+# 5. Create entity alias and token role
+bao write identity/entity-alias \
+    name=web-alias \
+    mount_accessor=auth_token_<ACCESSOR> \
+    canonical_id=<ENTITY_ID>
+curl -X POST http://127.0.0.1:8200/v1/auth/token/roles/web-role \
+  -d '{"allowed_entity_aliases":["web-alias"]}'
+
+# 6. Get a token for the entity
+TOKEN=$(curl -s -X POST http://127.0.0.1:8200/v1/auth/token/create/web-role \
+  -d '{"entity_alias":"web-alias"}' | python3 -c "import json,sys; print(json.load(sys.stdin)['auth']['client_token'])")
+
+# 7. Enroll the CSR with the entity token
+CSR=$(base64 -w 0 /tmp/server.csr)
+curl -s -X POST http://127.0.0.1:8200/v1/dnsplugin/enroll/new \
+  -H "X-Vault-Token: $TOKEN" \
+  -d "{\"csr\": \"$CSR\"}"
+
+# 8. Poll for completion (repeat until state is "completed")
 bao read dnsplugin/enroll/retrieve/<ID>
 
-# 6. On completion, extract the certificate
+# 9. Extract the certificate
 bao read dnsplugin/enroll/retrieve/<ID> -format=json |
     python3 -c "import json,sys; print(json.load(sys.stdin)['data']['certificate'])" \
     > /tmp/server.crt
+
+# 10. Revoke the certificate
+curl -s -X POST http://127.0.0.1:8200/v1/dnsplugin/revoke \
+  -H "X-Vault-Token: $TOKEN" \
+  -d "{\"certificate\": \"$(cat /tmp/server.crt)\"}"
 ```
 
-### Renewal
-
-Renewal uses the same enrollment flow with the same CSR (or a new one):
+### Authorization Test Cases
 
 ```bash
-bao write dnsplugin/enroll/new csr="$CSR"
-# Returns same enrollment ID; plugin re-issues the certificate
-# (new not_after timestamp)
-bao read dnsplugin/enroll/retrieve/<ID>
-```
+# ✅ Entity with allowed_domains=www.example.com, www succeeds
+curl -X POST ... -d '{"csr": "..."}'   # → pending
 
-### Revocation
+# ✅ Entity with allowed_domains=www.example.com, www.example.com succeeds
+#    (exact match, no wildcard)
 
-```bash
-# Revoke by certificate
-bao write dnsplugin/revoke certificate="$(cat /tmp/server.crt)"
+# ❌ Entity with allowed_domains=www.example.com, sub.www.example.com fails
+#    domain "sub.www.example.com" not in entity's allowed_domains
 
-# Or cancel a pending enrollment
-bao write dnsplugin/revoke id=<ID>
+# ❌ Entity with metadata but no allowed_domains fails
+#    entity metadata missing allowed_domains
+
+# ❌ Entity without metadata fails
+#    entity metadata not found, ensure the entity has allowed_domains metadata
 ```
 
 ## STORAGE KEYS
@@ -398,6 +450,8 @@ The plugin stores data in the following OpenBao key paths:
 |---|---|
 | `config/acme_email` | ACME account email |
 | `config/acme_key` | ACME account private key (PEM) |
+| `config/acme_url` | ACME directory URL (staging or production) |
+| `config/acme_uri` | ACME account URI (for revocation `kid` header) |
 | `config/roles/<name>` | DNS provider role (JSON: name, provider, zone, credentials) |
 | `enroll/<id>` | Enrollment state (JSON: CSR, domains, provider, credentials, status, certificate, timestamps) |
 
@@ -497,27 +551,6 @@ path "dnsplugin/enroll/retrieve/*" {
 }
 ```
 
-### Entity Metadata Authorization
-
-When using entity metadata for authorization, attach the `allowed_domains`
-attribute to an entity or token:
-
-```bash
-# Set allowed_domains on an entity
-bao write auth/token/accessor/<ACCESSOR> \
-    metadata=allowed_domains=example.com,*.example.com
-
-# Or create a token with allowed_domains
-bao write auth/token/create \
-    policies=issuer \
-    metadata=allowed_domains=staging.example.com
-```
-
-The plugin checks entity metadata during enrollment. If `allowed_domains` is
-set, the CSR domains must be an exact match against the listed values. If not
-set, the plugin falls back to checking role zone attributes (the domain must
-equal the zone or be a subdomain of it).
-
 ### Namespace Policies
 
 When using OpenBao namespaces, the plugin paths are relative to the namespace
@@ -552,12 +585,27 @@ storage. The following environment variables affect plugin startup:
 
 The dns-acme plugin was developed for OpenBao by Michael Quinn
 <mikerquinn> as an ACME DNS-01 secrets engine for automated certificate
-provisioning with role-based domain authorization.
+provisioning with entity-based domain authorization.
 
 The plugin uses the go-acme/lego library for ACME protocol support and
 DNS-01 challenge resolution across 100+ DNS providers.
 
 ## VERSION HISTORY
+
+### v1.0.3 — June 14, 2026
+
+- Entity metadata resolved authoritatively from OpenBao via `EntityInfo` RPC
+- `allowed_domains` is required on every entity; enrollment fails if missing
+- Removed role zone fallback for authorization — entity metadata is the only check
+- Removed `acme_url` and `acme_email` override parameters from `enroll/new`
+- ACME account URI now persisted in storage and used as JWS `kid` header for revocation
+- Fixed Let's Encrypt staging revocation JWK mismatch (was embedding account JWK instead of using `kid`)
+- Removed debug `fmt.Printf` and `os.WriteFile` logs; all logging via hclog
+
+### v1.0.2 — June 14, 2026
+
+- Removed `fmt` import from backend.go
+- Removed unused `crypto/rsa` and `encoding/base64` imports from plugin.go
 
 ### v1.0.1 — June 7, 2026
 
@@ -572,4 +620,4 @@ Initial release.
 
 ## VERSION
 
-This document describes version 1.0.2 of the dns-acme plugin for OpenBao.
+This document describes version 1.0.3 of the dns-acme plugin for OpenBao.
