@@ -61,6 +61,11 @@ func (s *EnrollmentStorage) GetACMEAccount(ctx context.Context) (*storage.ACMEAc
 	return storage.NewConfigStorage(s.backend).GetACMEAccount(ctx)
 }
 
+// SetACMEAccount stores the ACME account configuration.
+func (s *EnrollmentStorage) SetACMEAccount(ctx context.Context, account *storage.ACMEAccount) error {
+	return storage.NewConfigStorage(s.backend).SetACMEAccount(ctx, account)
+}
+
 // GetACMEKey retrieves the ACME private key PEM data.
 func (s *EnrollmentStorage) GetACMEKey(ctx context.Context) (string, error) {
 	account, err := s.GetACMEAccount(ctx)

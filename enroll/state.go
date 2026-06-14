@@ -17,7 +17,10 @@ import (
 	"github.com/go-acme/lego/v4/registration"
 	crt "github.com/mikerquinn/dns-acme/crypto"
 	"github.com/mikerquinn/dns-acme/dns"
+	"github.com/mikerquinn/dns-acme/storage"
 )
+
+const defaultACMEURL = "https://acme-v02.api.letsencrypt.org/directory"
 
 // acmeUser implements registration.User so lego can manage the ACME account.
 type acmeUser struct {
@@ -176,7 +179,7 @@ func (i *Issuer) processEnrollment(ctx context.Context, state *EnrollmentState) 
 	// Create ACME client
 	acmeURL := state.ACMEURL
 	if acmeURL == "" {
-		acmeURL = "https://acme-v02.api.letsencrypt.org/directory"
+		acmeURL = defaultACMEURL
 	}
 
 	config := lego.NewConfig(user)
@@ -202,6 +205,13 @@ func (i *Issuer) processEnrollment(ctx context.Context, state *EnrollmentState) 
 			i.failEnrollment(ctx, state, fmt.Sprintf("failed to register ACME account: %v", err))
 			return
 		}
+		// Persist the new account so subsequent enrollments reuse it
+		key, _ := i.store.GetACMEKey(ctx)
+		i.store.SetACMEAccount(ctx, &storage.ACMEAccount{
+			Email: user.GetEmail(),
+			Key:   key,
+			URL:   acmeURL,
+		})
 	}
 	// Store registration for future use
 	user.SetRegistration(reg)

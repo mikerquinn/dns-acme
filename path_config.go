@@ -77,11 +77,11 @@ func pathConfig(b *dnsacmeBackend) []*framework.Path {
 
 // pathConfigExistenceCheck verifies if the configuration exists.
 func (b *dnsacmeBackend) pathConfigExistenceCheck(ctx context.Context, req *logical.Request, data *framework.FieldData) (bool, error) {
-	out, err := req.Storage.Get(ctx, "config")
+	keys, err := req.Storage.List(ctx, "config/")
 	if err != nil {
 		return false, fmt.Errorf("existence check failed: %w", err)
 	}
-	return out != nil, nil
+	return len(keys) > 0, nil
 }
 
 // pathConfigRead reads the configuration and outputs non-sensitive information.

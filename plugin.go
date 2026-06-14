@@ -54,6 +54,7 @@ func (p *Plugin) Init(ctx context.Context, backend storage.StorageBackend) {
 	if err == nil {
 		p.acmeEmail = account.Email
 		p.acmeKeyPEM = account.Key
+		p.acmeURL = account.URL
 		p.logger.Info("loaded ACME account from storage")
 	}
 
