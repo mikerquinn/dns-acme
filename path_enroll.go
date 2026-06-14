@@ -102,32 +102,22 @@ func (b *dnsacmeBackend) pathEnroll(ctx context.Context, req *logical.Request, d
 		return &logical.Response{Data: map[string]interface{}{"error": "CSR has no domain names"}}, nil
 	}
 
-	// Extract entity metadata for authorization
-	metadata := make(map[string]string)
-	if md, ok := req.Headers["X-Entity-Metadata"]; ok {
-		for _, s := range md {
-			parts := strings.Split(s, ";")
-			for _, part := range parts {
-				kv := strings.SplitN(part, "=", 2)
-				if len(kv) == 2 {
-					metadata[strings.TrimSpace(kv[0])] = strings.TrimSpace(kv[1])
-				}
+	// Resolve entity metadata from OpenBao (authoritative, set by admin).
+	// req.EntityID is populated by OpenBao from the token's entity.
+	var entityMetadata map[string]string
+	if req.EntityID != "" {
+		ent, err := b.System().EntityInfo(req.EntityID)
+		if err == nil && ent != nil {
+			entityMetadata = ent.Metadata
+			if b.logger != nil {
+				b.logger.Info("resolved entity metadata", "entity_id", req.EntityID, "metadata", entityMetadata)
 			}
 		}
 	}
-	var entityID string
-	if eid, ok := req.Headers["X-Entity-Id"]; ok && len(eid) > 0 {
-		entityID = eid[0]
-		_ = entityID // available for entity context in authorization
-	}
-	domain := ""
-	if d, ok := req.Headers["X-Entity-Domain"]; ok && len(d) > 0 {
-		domain = d[0]
-	}
 
-	// Validate entity authorization (skip if no entity context, e.g. dev CLI)
-	if domain != "" && len(metadata) > 0 {
-		if err := b.validateEntityAuthorization(ctx, req, domain, metadata, csrInfo.Domains); err != nil {
+	// Validate entity authorization using authoritative entity metadata
+	if len(entityMetadata) > 0 {
+		if err := b.validateEntityAuthorization(ctx, req, entityMetadata, csrInfo.Domains); err != nil {
 			return &logical.Response{Data: map[string]interface{}{"error": "entity not authorized: " + err.Error()}}, nil
 		}
 	}
@@ -251,7 +241,9 @@ func (b *dnsacmeBackend) pathEnrollRetrieve(ctx context.Context, req *logical.Re
 }
 
 // validateEntityAuthorization checks whether the requesting entity is authorized for the requested domains.
-func (b *dnsacmeBackend) validateEntityAuthorization(ctx context.Context, req *logical.Request, domain string, metadata map[string]string, domains []string) error {
+// The entity's authoritative metadata is resolved from OpenBao via the entity's token.
+// allowed_domains is a comma-separated list of domains the entity is authorized to enroll for.
+func (b *dnsacmeBackend) validateEntityAuthorization(ctx context.Context, req *logical.Request, metadata map[string]string, domains []string) error {
 	if allowedDomains, ok := metadata["allowed_domains"]; ok && allowedDomains != "" {
 		allowedList := strings.Split(allowedDomains, ",")
 		for _, requested := range domains {
