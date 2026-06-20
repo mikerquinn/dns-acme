@@ -8,14 +8,19 @@
 
 **dns-acme** is an OpenBao secrets engine plugin that issues X.509
 certificates from any ACME-compatible certificate authority (CA) using the
-DNS-01 challenge mechanism.
+DNS-01 challenge mechanism.  The motivation behind DNS-ACME is the fact that
+most DNS providers only provide API tokens scoped for a whole zone or even 
+whole account.  Thus, if you have multiple servers or endpoints in your 
+environment that need certificates from an ACME provider, you can't grant 
+any of them the ability to enroll as their own name, without also granting
+them the ability to enroll as every other name.  DNS-ACME resolves this issue.
 
 The plugin uses an **entity-based authorization model**. An admin provisions
 entities and assigns them an `allowed_domains` metadata attribute listing the
 domains each entity is authorized to enroll for. During enrollment the plugin
 resolves the requesting entity's metadata authoritatively from OpenBao via the
-`EntityInfo` RPC — it is not settable by the user in request headers. Every
-CSR domain must be an exact match against the entity's `allowed_domains` list.
+`EntityInfo`.  Every CSR domain must be an exact match against the entity's 
+`allowed_domains` list.
 
 The plugin also maps DNS provider credentials to roles by zone. During
 enrollment, each CSR domain is matched against configured roles to find the
@@ -50,12 +55,6 @@ Register the plugin binary in the OpenBao plugin catalog, then enable it:
 ```bash
 bao plugin register -sha256=<SHA256> secret dns-acme
 bao secrets enable -path=dnsplugin -plugin-name=dns-acme plugin
-```
-
-To require TLS for the mount:
-
-```bash
-bao secrets enable -tls-required=true -path=dnsplugin -plugin-name=dns-acme plugin
 ```
 
 ## API PATHS
@@ -438,19 +437,6 @@ curl -X POST ... -d '{"csr": "..."}'   # → pending
 #    entity metadata not found, ensure the entity has allowed_domains metadata
 ```
 
-## STORAGE KEYS
-
-The plugin stores data in the following OpenBao key paths:
-
-| Storage Key | Contents |
-|---|---|
-| `config/acme_email` | ACME account email |
-| `config/acme_key` | ACME account private key (PEM) |
-| `config/acme_url` | ACME directory URL (staging or production) |
-| `config/acme_uri` | ACME account URI (for revocation `kid` header) |
-| `config/roles/<name>` | DNS provider role (JSON: name, provider, zone, credentials) |
-| `enroll/<id>` | Enrollment state (JSON: CSR, domains, provider, credentials, status, certificate, timestamps) |
-
 ## ACL POLICIES
 
 OpenBao ACL policies control path-level access to the plugin. Below are
@@ -525,47 +511,6 @@ path "dnsplugin/enroll/retrieve/*" {
 }
 ```
 
-### Read-Only Auditor
-
-Can list roles and read enrollments but cannot create or update anything.
-
-```bash
-path "dnsplugin/config" {
-    capabilities = ["read"]
-}
-
-path "dnsplugin/config/roles" {
-    capabilities = ["list"]
-}
-
-path "dnsplugin/config/roles/*" {
-    capabilities = ["read"]
-}
-
-path "dnsplugin/enroll/retrieve/*" {
-    capabilities = ["read"]
-}
-```
-
-### Namespace Policies
-
-When using OpenBao namespaces, the plugin paths are relative to the namespace
-root. A namespace-scoped policy:
-
-```bash
-path "sys/mounts/dnsplugin" {
-    capabilities = ["create", "read", "update", "delete"]
-}
-
-path "plugin/dnsplugin" {
-    capabilities = ["read"]
-}
-
-path "dnsplugin/*" {
-    capabilities = ["create", "read", "update", "delete", "list"]
-}
-```
-
 ## ENVIRONMENT VARIABLES
 
 No environment variables are required. All configuration is stored in OpenBao
@@ -586,34 +531,3 @@ provisioning with entity-based domain authorization.
 The plugin uses the go-acme/lego library for ACME protocol support and
 DNS-01 challenge resolution across 100+ DNS providers.
 
-## VERSION HISTORY
-
-### v1.0.3 — June 14, 2026
-
-- Entity metadata resolved authoritatively from OpenBao via `EntityInfo` RPC
-- `allowed_domains` is required on every entity; enrollment fails if missing
-- Removed role zone fallback for authorization — entity metadata is the only check
-- Removed `acme_url` and `acme_email` override parameters from `enroll/new`
-- ACME account URI now persisted in storage and used as JWS `kid` header for revocation
-- Fixed Let's Encrypt staging revocation JWK mismatch (was embedding account JWK instead of using `kid`)
-- Removed debug `fmt.Printf` and `os.WriteFile` logs; all logging via hclog
-
-### v1.0.2 — June 14, 2026
-
-- Removed `fmt` import from backend.go
-- Removed unused `crypto/rsa` and `encoding/base64` imports from plugin.go
-
-### v1.0.1 — June 7, 2026
-
-- Immediate error on `enroll/new` when no matching role is found (previously created a `pending` enrollment that errored on polling)
-- Improved error messages for no-matching-role and unknown-provider cases
-- Removed memory storage backend — OpenBao storage is the only backend
-- Removed `allowed_names` glob pattern on roles; zone-based matching and entity metadata are the only authorization methods
-
-### v1.0 — June 7, 2026
-
-Initial release.
-
-## VERSION
-
-This document describes version 1.0.3 of the dns-acme plugin for OpenBao.
