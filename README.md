@@ -214,12 +214,12 @@ bao write identity/entity-alias \
     mount_accessor=auth_token_xxx \
     canonical_id=<ENTITY_ID>
 
-curl -X POST http://127.0.0.1:8200/v1/auth/token/roles/app-role \
-  -d '{"allowed_entity_aliases":["app-server-alias"]}'
+bao write auth/token/roles/app-role \
+    allowed_entity_aliases="app-server-alias"
 
-# Get a token for the entity
-curl -X POST http://127.0.0.1:8200/v1/auth/token/create/app-role \
-  -d '{"entity_alias":"app-server-alias"}'
+
+TOKEN=$(bao write -field=auth.client_token auth/token/create/app-role \
+    entity_alias=app-server-alias)
 ```
 
 ### enroll/retrieve/**`<ID>`**
@@ -391,38 +391,35 @@ bao write identity/entity-alias \
     name=web-alias \
     mount_accessor=auth_token_<ACCESSOR> \
     canonical_id=<ENTITY_ID>
-curl -X POST http://127.0.0.1:8200/v1/auth/token/roles/web-role \
-  -d '{"allowed_entity_aliases":["web-alias"]}'
+bao write auth/token/roles/web-role \
+    allowed_entity_aliases="web-alias"
+
 
 # 6. Get a token for the entity
-TOKEN=$(curl -s -X POST http://127.0.0.1:8200/v1/auth/token/create/web-role \
-  -d '{"entity_alias":"web-alias"}' | python3 -c "import json,sys; print(json.load(sys.stdin)['auth']['client_token'])")
+TOKEN=$(bao write -field=auth.client_token auth/token/create/web-role \
+    entity_alias=web-alias)
 
 # 7. Enroll the CSR with the entity token
 CSR=$(base64 -w 0 /tmp/server.csr)
-curl -s -X POST http://127.0.0.1:8200/v1/dnsplugin/enroll/new \
-  -H "X-Vault-Token: $TOKEN" \
-  -d "{\"csr\": \"$CSR\"}"
+ID=$(bao write -field=id dnsplugin/enroll/new csr="$CSR")
 
 # 8. Poll for completion (repeat until state is "completed")
-bao read dnsplugin/enroll/retrieve/<ID>
+bao read dnsplugin/enroll/retrieve/$ID
 
 # 9. Extract the certificate
-bao read dnsplugin/enroll/retrieve/<ID> -format=json |
-    python3 -c "import json,sys; print(json.load(sys.stdin)['data']['certificate'])" \
+bao read dnsplugin/enroll/retrieve/$ID -format=json |
+    jq -r '.data.certificate' \
     > /tmp/server.crt
 
 # 10. Revoke the certificate
-curl -s -X POST http://127.0.0.1:8200/v1/dnsplugin/revoke \
-  -H "X-Vault-Token: $TOKEN" \
-  -d "{\"certificate\": \"$(cat /tmp/server.crt)\"}"
+bao write dnsplugin/revoke certificate="$(cat /tmp/server.crt)"
 ```
 
 ### Authorization Test Cases
 
 ```bash
 # ✅ Entity with allowed_domains=www.example.com, www succeeds
-curl -X POST ... -d '{"csr": "..."}'   # → pending
+bao write dnsplugin/enroll/new csr="..."   # → pending
 
 # ✅ Entity with allowed_domains=www.example.com, www.example.com succeeds
 #    (exact match, no wildcard)
