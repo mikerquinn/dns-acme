@@ -54,7 +54,7 @@ Register the plugin binary in the OpenBao plugin catalog, then enable it:
 
 ```bash
 bao plugin register -sha256=<SHA256> dns-acme
-bao secrets enable -path=dnsplugin -plugin-name=dns-acme plugin
+bao secrets enable -path=dns-acme -plugin-name=dns-acme plugin
 ```
 
 ## API PATHS
@@ -94,7 +94,7 @@ as the JWS `kid` header so Let's Encrypt staging accepts the revocation).
 | **message** | string | Confirmation string |
 
 ```bash
-bao write dnsplugin/config/create \
+bao write dns-acme/config/create \
     email=certs@example.com \
     acme_url=https://acme-staging-v02.api.letsencrypt.org/directory
 ```
@@ -104,7 +104,7 @@ bao write dnsplugin/config/create \
 Retrieves the current ACME account configuration.
 
 ```bash
-bao read dnsplugin/config
+bao read dns-acme/config
 ```
 
 This path also accepts a write/update operation to set the ACME account
@@ -115,7 +115,7 @@ credentials directly. When using this form, both `email` and `key` are required.
 Lists all configured DNS provider roles.
 
 ```bash
-bao read dnsplugin/config/roles
+bao read dns-acme/config/roles
 ```
 
 ### config/roles/**`<NAME>`**
@@ -136,14 +136,14 @@ name, credential set, and DNS zone to a set of credentials.
 | **provider** | string | DNS provider name |
 
 ```bash
-bao write dnsplugin/config/roles/cloudflare \
+bao write dns-acme/config/roles/cloudflare \
     provider=cloudflare \
     zone=example.com \
     CLOUDFLARE_DNS_API_TOKEN=cfut_mQ40...
 ```
 
 ```bash
-bao write dnsplugin/config/roles/route53 \
+bao write dns-acme/config/roles/route53 \
     provider=route53 \
     zone=staging.example.com \
     AWS_ACCESS_KEY_ID=AKIA... \
@@ -157,8 +157,8 @@ role wins — register narrower zones before broader ones to override.
 
 | Operation | Command | Description |
 |---|---|---|
-| **Read** | `bao read dnsplugin/config/roles/<NAME>` | Retrieve a role by name |
-| **Delete** | `bao delete dnsplugin/config/roles/<NAME>` | Remove a role by name |
+| **Read** | `bao read dns-acme/config/roles/<NAME>` | Retrieve a role by name |
+| **Delete** | `bao delete dns-acme/config/roles/<NAME>` | Remove a role by name |
 
 ## ENROLLMENT PATHS
 
@@ -240,7 +240,7 @@ certificate bundle is included.
 Polls enrollment status with the ID passed in the request body.
 
 ```bash
-bao write dnsplugin/enroll/retrieve id=<ID>
+bao write dns-acme/enroll/retrieve id=<ID>
 ```
 
 ## REVOKE PATH
@@ -267,8 +267,8 @@ requires this header (rather than embedding the account JWK) for revocation.
 | **domains** | []string | Domains of the cancelled enrollment — only present when revoking by enrollment ID |
 
 ```bash
-bao write dnsplugin/revoke certificate="$(cat /tmp/server.crt)"
-bao write dnsplugin/revoke id=<ENROLLMENT_ID>
+bao write dns-acme/revoke certificate="$(cat /tmp/server.crt)"
+bao write dns-acme/revoke id=<ENROLLMENT_ID>
 ```
 
 ## CONFIGURATION
@@ -282,7 +282,7 @@ persistent storage, the ACME account (email, key, and URI) is loaded
 automatically.
 
 ```bash
-bao write dnsplugin/config/create \
+bao write dns-acme/config/create \
     email=certificates@example.com \
     acme_url=https://acme-staging-v02.api.letsencrypt.org/directory
 ```
@@ -307,7 +307,7 @@ any string-valued keys in the role configuration. Keys are converted to
 uppercase and passed as-is to lego — no auto-prefixing.
 
 ```bash
-bao write dnsplugin/config/roles/cloudflare \
+bao write dns-acme/config/roles/cloudflare \
     provider=cloudflare \
     zone=example.com \
     CLOUDFLARE_DNS_API_TOKEN=cfut_token
@@ -462,7 +462,7 @@ bao write dns-acme/revoke certificate="$(cat /tmp/server.crt)"
 
 ```bash
 # ✅ Entity with allowed_domains=www.example.com, www succeeds
-bao write dnsplugin/enroll/new csr="..."   # → pending
+bao write dns-acme/enroll/new csr="..."   # → pending
 
 # ✅ Entity with allowed_domains=www.example.com, www.example.com succeeds
 #    (exact match, no wildcard)
