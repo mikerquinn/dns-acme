@@ -53,7 +53,7 @@ until the certificate is issued.
 Register the plugin binary in the OpenBao plugin catalog, then enable it:
 
 ```bash
-bao plugin register -sha256=<SHA256> secret dns-acme
+bao plugin register -sha256=<SHA256> dns-acme
 bao secrets enable -path=dnsplugin -plugin-name=dns-acme plugin
 ```
 
@@ -455,7 +455,7 @@ bao write dns-acme/revoke certificate="$(cat /tmp/server.crt)"
 - After login, verify the correct entity with:
 
   ```bash
-  bao token lookup -self
+  bao token lookup
   ```
 
 ### Authorization Test Cases
