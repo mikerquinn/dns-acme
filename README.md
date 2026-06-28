@@ -479,75 +479,41 @@ bao write dnsplugin/enroll/new csr="..."   # → pending
 
 ## ACL POLICIES
 
-OpenBao ACL policies control path-level access to the plugin. Below are
-example policies for common use cases.
-
-### Administrator
-
-Full access to all plugin paths.
-
-```bash
-path "dnsplugin/*" {
-    capabilities = ["create", "read", "update", "delete", "list"]
-}
+OpenBao ACL policies control path-level access to the plugin. Below is a typical policy for certificate enrollment.
+Note that allowed names are directly enforced by the plugin not the policy.
 ```
-
-### Operator
-
-Can create roles, enroll certificates, and retrieve/issue certificates,
-but cannot delete roles or the ACME account.
-
-```bash
-path "dnsplugin/config" {
-    capabilities = ["read"]
+# Minimal policy for a dns-acme enrollment and self renewal.  Create a token with this policy and it can enroll and renew indefinitely
+# Self renewal
+path "auth/token/renew-self" {
+  capabilities = ["update"]
 }
 
-path "dnsplugin/config/create" {
-    capabilities = ["create"]
-}
-
-path "dnsplugin/config/roles" {
-    capabilities = ["create", "read", "list"]
-}
-
-path "dnsplugin/config/roles/*" {
-    capabilities = ["create", "read", "update", "delete"]
-}
-
+# Main enrollment
 path "dnsplugin/enroll/new" {
-    capabilities = ["create"]
+  capabilities = ["create", "update"]
 }
 
-path "dnsplugin/enroll/retrieve/*" {
-    capabilities = ["read"]
-}
-
+# Retrieve operations
 path "dnsplugin/enroll/retrieve" {
-    capabilities = ["create"]
-}
-
-path "dnsplugin/revoke" {
-    capabilities = ["create"]
-}
-```
-
-### Issuer
-
-Limited to a subset of domains via role name prefixes. This policy allows
-issuance for roles whose names start with `staging-` and read access to those
-enrollments.
-
-```bash
-path "dnsplugin/config/roles/staging*" {
-    capabilities = ["create", "read", "update"]
-}
-
-path "dnsplugin/enroll/new" {
-    capabilities = ["create"]
+  capabilities = ["create", "read"]
 }
 
 path "dnsplugin/enroll/retrieve/*" {
-    capabilities = ["read"]
+  capabilities = ["read"]
+}
+
+# Revoke
+path "dnsplugin/revoke" {
+  capabilities = ["create", "update"]
+}
+
+# If the plugin needs to read entities or aliases during enrollment
+path "identity/entity-alias" {
+  capabilities = ["read", "list"]
+}
+
+path "identity/entity/name/video3" {
+  capabilities = ["read"]
 }
 ```
 
