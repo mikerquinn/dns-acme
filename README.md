@@ -359,61 +359,104 @@ The certificate issuance flow is asynchronous:
 Typical total time: 30–120 seconds depending on DNS propagation and CA
 processing speed.
 
-## EXAMPLES
+## Examples
 
-### Full Workflow with Entity Authorization
+### 1. Generate a CSR
 
 ```bash
-# 1. Generate a CSR
 openssl req -new -newkey rsa:2048 -nodes \
     -keyout /tmp/server.key \
     -out /tmp/server.csr \
-    -subj "/CN=www.example.com" \
-    -addext "subjectAltName=DNS:www.example.com"
-
-# 2. Create an ACME account
-bao write dnsplugin/config/create \
-    email=certs@example.com \
-    acme_url=https://acme-staging-v02.api.letsencrypt.org/directory
-
-# 3. Create a DNS role
-bao write dnsplugin/config/roles/cloudflare \
-    provider=cloudflare \
-    zone=example.com \
-    CLOUDFLARE_DNS_API_TOKEN=cfut_mQ40...
-
-# 4. Provision an entity with allowed_domains
-bao write identity/entity name=web-server \
-    metadata.allowed_domains=www.example.com
-
-# 5. Create entity alias and token role
-bao write identity/entity-alias \
-    name=web-alias \
-    mount_accessor=auth_token_<ACCESSOR> \
-    canonical_id=<ENTITY_ID>
-bao write auth/token/roles/web-role \
-    allowed_entity_aliases="web-alias"
-
-
-# 6. Get a token for the entity
-TOKEN=$(bao write -field=auth.client_token auth/token/create/web-role \
-    entity_alias=web-alias)
-
-# 7. Enroll the CSR with the entity token
-CSR=$(base64 -w 0 /tmp/server.csr)
-ID=$(bao write -field=id dnsplugin/enroll/new csr="$CSR")
-
-# 8. Poll for completion (repeat until state is "completed")
-bao read dnsplugin/enroll/retrieve/$ID
-
-# 9. Extract the certificate
-bao read dnsplugin/enroll/retrieve/$ID -format=json |
-    jq -r '.data.certificate' \
-    > /tmp/server.crt
-
-# 10. Revoke the certificate
-bao write dnsplugin/revoke certificate="$(cat /tmp/server.crt)"
+    -subj "/CN=foo.example.com" \
+    -addext "subjectAltName=DNS:foo.example.com"
 ```
+
+### 2. Create or update the entity with `allowed_domains`
+
+```bash
+bao write identity/entity/name/foo \
+    metadata.allowed_domains="foo.example.com"
+```
+
+### 3. Create the AppRole role (if it doesn't exist)
+
+```bash
+bao write auth/approle/role/foo \
+    token_policies=dns-acme-enroll \
+    token_period=2160h \
+    token_type=service
+```
+
+### 4. Get the AppRole `role_id`
+
+```bash
+bao read -field=role_id auth/approle/role/foo
+```
+
+### 5. Create the entity alias (name **must** be the `role_id`)
+
+```bash
+bao write identity/entity-alias \
+    name=<role_id-from-step-4> \
+    mount_accessor=auth_approle_<identifier> \
+    canonical_id=<foo-entity-id>
+```
+
+### 6. Generate a `secret_id` and log in
+
+```bash
+# Generate secret_id
+SECRET_ID=$(bao write -force -field=secret_id auth/approle/role/foo/secret-id)
+
+# Create login payload
+cat > approle-login.json << EOF
+{
+  "role_id": "<role_id-from-step-4>",
+  "secret_id": "$SECRET_ID"
+}
+EOF
+
+# Login
+bao write auth/approle/login @approle-login.json
+```
+
+### 7. Enroll the CSR
+
+```bash
+CSR=$(base64 -w 0 /tmp/server.csr)
+ID=$(bao write -field=id dns-acme/enroll/new csr="$CSR")
+```
+
+### 8. Poll for completion
+
+```bash
+bao read dns-acme/enroll/retrieve/$ID
+```
+
+### 9. Retrieve the certificate
+
+```bash
+bao read dns-acme/enroll/retrieve/$ID -format=json | \
+    jq -r '.data.certificate' > /tmp/server.crt
+```
+
+### 10. Revoke the certificate (when needed)
+
+```bash
+bao write dns-acme/revoke certificate="$(cat /tmp/server.crt)"
+```
+
+---
+
+### Important Notes
+
+- The **entity alias name must exactly match the AppRole `role_id`** (the UUID returned in step 4). Using a friendly name will not work.
+- The `allowed_domains` metadata on the entity is **required**. Enrollment will fail if it is missing or if the CSR domains do not match.
+- After login, verify the correct entity with:
+
+  ```bash
+  bao token lookup -self
+  ```
 
 ### Authorization Test Cases
 
