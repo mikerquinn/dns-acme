@@ -44,20 +44,13 @@ func backend() *dnsacmeBackend {
 			pathRevoke(b),
 		),
 		PathsSpecial: &logical.Paths{
-			Unauthenticated: []string{
-				"config",
-				"config/*",
-				"config/create",
-				"enroll/new",
-				"enroll/retrieve",
-				"enroll/retrieve/*",
-				"revoke",
-			},
+			Unauthenticated: []string{},
 			SealWrapStorage: []string{
 				"config",
 				"config/role/*",
 			},
 		},
+
 		BackendType: logical.TypeLogical,
 		Invalidate:  b.invalidate,
 	}
