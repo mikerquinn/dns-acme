@@ -265,8 +265,9 @@ func (b *dnsacmeBackend) validateEntityAuthorization(ctx context.Context, req *l
 	allowedList := strings.Split(allowedDomains, ",")
 	for _, requested := range domains {
 		found := false
+		requestedLower := strings.ToLower(requested)
 		for _, allowed := range allowedList {
-			if strings.TrimSpace(allowed) == requested {
+			if strings.ToLower(strings.TrimSpace(allowed)) == requestedLower {
 				found = true
 				break
 			}

@@ -65,9 +65,9 @@ func extractDomains(csr *x509.CertificateRequest) []string {
 		domains[strings.ToLower(csr.Subject.CommonName)] = true
 	}
 
-	// Add SANs (DNS names)
+	// Add SANs (DNS names) — lowercased for case-insensitive comparison
 	for _, name := range csr.DNSNames {
-		domains[name] = true
+		domains[strings.ToLower(name)] = true
 	}
 
 	// Convert map to slice
