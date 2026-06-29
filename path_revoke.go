@@ -59,6 +59,19 @@ func (b *dnsacmeBackend) pathRevoke(ctx context.Context, req *logical.Request, d
 		if err != nil {
 			return &logical.Response{Data: map[string]interface{}{"error": "enrollment not found: " + err.Error()}}, nil
 		}
+
+		// Resolve entity metadata and verify authorization
+		if req.EntityID != "" {
+			ent, err := b.System().EntityInfo(req.EntityID)
+			if err == nil && ent != nil && ent.Metadata != nil {
+				if allowedDomains, ok := ent.Metadata["allowed_domains"]; ok && allowedDomains != "" {
+					if err := b.validateEntityAuthorization(ctx, req, ent.Metadata, state.Domains); err != nil {
+						return &logical.Response{Data: map[string]interface{}{"error": "entity not authorized: " + err.Error()}}, nil
+					}
+				}
+			}
+		}
+
 		state.State = "cancelled"
 		b.enrollStore.UpdateEnrollment(ctx, state)
 		return &logical.Response{Data: map[string]interface{}{
@@ -88,6 +101,18 @@ func (b *dnsacmeBackend) pathRevoke(ctx context.Context, req *logical.Request, d
 	}
 	if client == nil {
 		return &logical.Response{Data: map[string]interface{}{"error": "ACME account not configured"}}, nil
+	}
+
+	// Resolve entity metadata and verify authorization against certificate DNS names
+	if req.EntityID != "" {
+		ent, err := b.System().EntityInfo(req.EntityID)
+		if err == nil && ent != nil && ent.Metadata != nil {
+			if allowedDomains, ok := ent.Metadata["allowed_domains"]; ok && allowedDomains != "" {
+				if err := b.validateEntityAuthorization(ctx, req, ent.Metadata, certParsed.DNSNames); err != nil {
+					return &logical.Response{Data: map[string]interface{}{"error": "entity not authorized: " + err.Error()}}, nil
+				}
+			}
+		}
 	}
 
 	if err := client.Certificate.Revoke([]byte(certStrStr)); err != nil {

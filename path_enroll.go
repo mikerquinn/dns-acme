@@ -204,6 +204,19 @@ func (b *dnsacmeBackend) pathEnrollRetrieve(ctx context.Context, req *logical.Re
 		return &logical.Response{Data: map[string]interface{}{"error": "enrollment not found: " + err.Error()}}, nil
 	}
 
+	// Resolve entity metadata from OpenBao (authoritative, set by admin).
+	if req.EntityID != "" {
+		ent, err := b.System().EntityInfo(req.EntityID)
+		if err == nil && ent != nil && ent.Metadata != nil {
+			if allowedDomains, ok := ent.Metadata["allowed_domains"]; ok && allowedDomains != "" {
+				// Verify enrollment domains are within the entity's allowed domains
+				if err := b.validateEntityAuthorization(ctx, req, ent.Metadata, state.Domains); err != nil {
+					return &logical.Response{Data: map[string]interface{}{"error": "entity not authorized: " + err.Error()}}, nil
+				}
+			}
+		}
+	}
+
 	switch state.State {
 	case "pending", "in_progress":
 		return &logical.Response{Data: map[string]interface{}{
