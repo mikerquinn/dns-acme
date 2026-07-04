@@ -217,8 +217,7 @@ bao write identity/entity-alias \
 bao write auth/token/roles/app-role \
     allowed_entity_aliases="app-server-alias"
 
-
-TOKEN=$(bao write -field=auth.client_token auth/token/create/app-role \
+TOKEN=$(bao write -field=token auth/token/create/app-role \
     entity_alias=app-server-alias)
 ```
 
@@ -361,6 +360,11 @@ processing speed.
 
 ## Examples
 
+The examples below show an AppRole-based login flow (steps 1–6), but the
+enrollment and retrieval commands (steps 7–10) work identically with any
+entity-bound token — whether obtained via AppRole login, `auth/token/create`,
+or any other auth method.
+
 ### 1. Generate a CSR
 
 ```bash
@@ -393,11 +397,15 @@ bao write auth/approle/role/foo \
 bao read -field=role_id auth/approle/role/foo
 ```
 
-### 5. Create the entity alias (name **must** be the `role_id`)
+### 5. Create the entity alias
+
+The entity alias name is a friendly identifier — it does **not** need to match
+the `role_id`. What matters is linking the alias to the correct entity and
+AppRole mount accessor.
 
 ```bash
 bao write identity/entity-alias \
-    name=<role_id-from-step-4> \
+    name=foo \
     mount_accessor=auth_approle_<identifier> \
     canonical_id=<foo-entity-id>
 ```
@@ -450,9 +458,9 @@ bao write dns-acme/revoke certificate="$(cat /tmp/server.crt)"
 
 ### Important Notes
 
-- The **entity alias name must exactly match the AppRole `role_id`** (the UUID returned in step 4). Using a friendly name will not work.
+- The entity alias **name is a friendly identifier** and does not need to match the AppRole `role_id` — only `canonical_id` and `mount_accessor` matter.
 - The `allowed_domains` metadata on the entity is **required**. Enrollment will fail if it is missing or if the CSR domains do not match.
-- After login, verify the correct entity with:
+- After login (whether via AppRole or token), verify the correct entity is bound with:
 
   ```bash
   bao token lookup
@@ -479,31 +487,33 @@ bao write dns-acme/enroll/new csr="..."   # → pending
 
 ## ACL POLICIES
 
-OpenBao ACL policies control path-level access to the plugin. Below is a typical policy for certificate enrollment.
-Note that allowed names are directly enforced by the plugin not the policy.
+OpenBao ACL policies control path-level access to the plugin. Below is a typical policy for certificate enrollment. Replace `<MOUNT_PATH>` with the actual mount path used on your instance.
+Note that allowed domains are directly enforced by the plugin, not by the ACL policy.
 ```
-# Minimal policy for a dns-acme enrollment and self renewal.  Create a token with this policy and it can enroll and renew indefinitely
+# Minimal policy for a dns-acme enrollment and self renewal.
+# Replace the mount path prefix (e.g. "dnsplugin") with the actual
+# mount path used on your OpenBao instance.
 # Self renewal
 path "auth/token/renew-self" {
   capabilities = ["update"]
 }
 
 # Main enrollment
-path "dnsplugin/enroll/new" {
+path "<MOUNT_PATH>/enroll/new" {
   capabilities = ["create", "update"]
 }
 
 # Retrieve operations
-path "dnsplugin/enroll/retrieve" {
+path "<MOUNT_PATH>/enroll/retrieve" {
   capabilities = ["create", "read"]
 }
 
-path "dnsplugin/enroll/retrieve/*" {
+path "<MOUNT_PATH>/enroll/retrieve/*" {
   capabilities = ["read"]
 }
 
 # Revoke
-path "dnsplugin/revoke" {
+path "<MOUNT_PATH>/revoke" {
   capabilities = ["create", "update"]
 }
 
@@ -512,7 +522,7 @@ path "identity/entity-alias" {
   capabilities = ["read", "list"]
 }
 
-path "identity/entity/name/video3" {
+path "identity/entity/name/<ENTITY_NAME>" {
   capabilities = ["read"]
 }
 ```
