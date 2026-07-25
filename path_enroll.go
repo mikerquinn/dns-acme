@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -137,9 +138,16 @@ func (b *dnsacmeBackend) pathEnroll(ctx context.Context, req *logical.Request, d
 		b.logger.Info("no entity metadata, skipping domain authorization (root or unauthenticated token)")
 	}
 
-	// Find matching role by checking if the domain falls within the role's zone
-	var matchedProvider string
-	var matchedRoleName string
+	// Find matching role by checking if the domain falls within the role's zone.
+	// Collect all matching roles, then pick the one with the longest (most specific) zone
+	// so that overlapping zones resolve deterministically regardless of Storage.List order.
+	type candidate struct {
+		name string
+		zone string
+		role *storage.DNSRole
+	}
+	var candidates []candidate
+
 	roles, err := req.Storage.List(ctx, storage.ConfigKeyRoles)
 	if err != nil {
 		return &logical.Response{Data: map[string]interface{}{"error": "failed to list roles: " + err.Error()}}, nil
@@ -151,23 +159,26 @@ func (b *dnsacmeBackend) pathEnroll(ctx context.Context, req *logical.Request, d
 		}
 		for _, domainName := range csrInfo.Domains {
 			if zoneMatchesDomain(domainName, role.Zone) {
-				matchedProvider = role.Provider
-				matchedRoleName = roleName
+				candidates = append(candidates, candidate{name: roleName, zone: role.Zone, role: role})
 				break
 			}
 		}
-		if matchedProvider != "" {
-			break
-		}
 	}
 
-	if matchedProvider == "" {
+	if len(candidates) == 0 {
 		domainsStr := strings.Join(csrInfo.Domains, ", ")
 		return &logical.Response{Data: map[string]interface{}{
 			"error":   fmt.Sprintf("no matching DNS role found for domains [%s] — ensure at least one role's zone covers one of the requested domains", domainsStr),
 			"domains": csrInfo.Domains,
 		}}, nil
 	}
+
+	// Sort candidates by zone length descending; longest zone = most specific match wins.
+	sort.Slice(candidates, func(i, j int) bool {
+		return len(candidates[i].zone) > len(candidates[j].zone)
+	})
+
+	matchedRoleName := candidates[0].name
 
 	enrollmentID := generateID()
 	state := enroll.NewEnrollmentState(enrollmentID, csrPEMOut, csrInfo.Domains)
