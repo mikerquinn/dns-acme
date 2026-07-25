@@ -365,7 +365,7 @@ type dns01ProviderWrapper struct {
 
 func (w *dns01ProviderWrapper) Present(domain, token, keyAuth string) error {
 	log := hclog.New(&hclog.LoggerOptions{Name: "dns01_present", Level: hclog.Info, Output: hclog.DefaultOutput, JSONFormat: true})
-	log.Info("dns01 Present", "domain", domain, "token", token, "keyAuth", keyAuth)
+	log.Info("dns01 Present", "domain", domain)
 	// Pass domain as-is: lego's Cloudflare provider already calls GetChallengeInfo
 	// internally, which builds _acme-challenge.{domain}. Doubling it would produce
 	// _acme-challenge._acme-challenge.{domain}.
