@@ -90,8 +90,6 @@ func (b *dnsacmeBackend) pathEnroll(ctx context.Context, req *logical.Request, d
 		return &logical.Response{Data: map[string]interface{}{"error": "CSR exceeds maximum size (1MB)"}}, nil
 	}
 
-	acmeURLStr := b.acmeURL
-
 	// Try to base64 decode if the CSR looks like base64 (no PEM headers)
 	csrPEMOut := csrPEM
 	if !strings.Contains(csrPEMOut, "-----") {
@@ -141,7 +139,7 @@ func (b *dnsacmeBackend) pathEnroll(ctx context.Context, req *logical.Request, d
 
 	// Find matching role by checking if the domain falls within the role's zone
 	var matchedProvider string
-	var matchedCredentials map[string]interface{}
+	var matchedRoleName string
 	roles, err := req.Storage.List(ctx, storage.ConfigKeyRoles)
 	if err != nil {
 		return &logical.Response{Data: map[string]interface{}{"error": "failed to list roles: " + err.Error()}}, nil
@@ -154,7 +152,7 @@ func (b *dnsacmeBackend) pathEnroll(ctx context.Context, req *logical.Request, d
 		for _, domainName := range csrInfo.Domains {
 			if zoneMatchesDomain(domainName, role.Zone) {
 				matchedProvider = role.Provider
-				matchedCredentials = role.Credentials
+				matchedRoleName = roleName
 				break
 			}
 		}
@@ -172,32 +170,8 @@ func (b *dnsacmeBackend) pathEnroll(ctx context.Context, req *logical.Request, d
 	}
 
 	enrollmentID := generateID()
-	state := enroll.NewEnrollmentState(enrollmentID, csrPEMOut, csrInfo.Domains, acmeURLStr)
-	state.Provider = matchedProvider
-	state.Credentials = matchedCredentials
-	// Store the role's zone so it can be passed to the DNS provider factory
-	// (zone is stored separately from credentials in the role)
-	for _, roleName := range roles {
-		role, err := b.getRole(ctx, req.Storage, roleName)
-		if err != nil {
-			continue
-		}
-		if role.Provider == matchedProvider {
-			state.Zone = role.Zone
-			break
-		}
-	}
-
-	// Embed ACME account info in the enrollment state so the goroutine
-	// doesn't need to call GetACMEAccount from storage (which may fail
-	// because the gRPC storage view is request-scoped).
-	b.logger.Info("pathEnroll: embedding ACME info in state", "acmeEmail", b.acmeEmail, "acmeKeyPEM_len", len(b.acmeKeyPEM), "acmeURL", b.acmeURL)
-	state.ACMEEmail = b.acmeEmail
-	state.ACMEKeyPEM = b.acmeKeyPEM
-	if acmeURLStr == "" {
-		acmeURLStr = defaultACMEURL
-	}
-	state.ACMEURL = acmeURLStr
+	state := enroll.NewEnrollmentState(enrollmentID, csrPEMOut, csrInfo.Domains)
+	state.RoleName = matchedRoleName
 
 	if err := b.enrollStore.CreateEnrollment(ctx, state); err != nil {
 		return &logical.Response{Data: map[string]interface{}{"error": "failed to create enrollment: " + err.Error()}}, nil

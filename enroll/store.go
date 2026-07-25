@@ -85,3 +85,8 @@ func (s *EnrollmentStorage) GetACMEKey(ctx context.Context) (string, error) {
 	}
 	return account.Key, nil
 }
+
+// GetRole retrieves a DNS role from storage by name.
+func (s *EnrollmentStorage) GetRole(ctx context.Context, name string) (*storage.DNSRole, error) {
+	return storage.GetRole(ctx, s.backend, name)
+}

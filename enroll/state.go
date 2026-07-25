@@ -47,13 +47,8 @@ func min(a, b int) int {
 type EnrollmentState struct {
 	ID          string                 `json:"id"`
 	CSRPEM      string                 `json:"csr_pem"`
-	ACMEEmail   string                 `json:"acme_email,omitempty"`
-	ACMEURL     string                 `json:"acme_url,omitempty"`
-	ACMEKeyPEM  string                 `json:"acme_key_pem,omitempty"`
 	Domains     []string               `json:"domains"`
-	Provider    string                 `json:"provider"`
-	Credentials map[string]interface{} `json:"credentials,omitempty"`
-	Zone        string                 `json:"zone,omitempty"`
+	RoleName    string                 `json:"role_name,omitempty"`
 	State       string                 `json:"state"` // pending, in_progress, completed, error
 	Certificate string                 `json:"certificate,omitempty"`
 	NotAfter    time.Time              `json:"not_after,omitempty"`
@@ -62,11 +57,10 @@ type EnrollmentState struct {
 }
 
 // NewEnrollmentState creates a new enrollment state with pending status.
-func NewEnrollmentState(id, csrPEM string, domains []string, acmeURL string) *EnrollmentState {
+func NewEnrollmentState(id, csrPEM string, domains []string) *EnrollmentState {
 	return &EnrollmentState{
 		ID:        id,
 		CSRPEM:    csrPEM,
-		ACMEURL:   acmeURL,
 		Domains:   domains,
 		State:     "pending",
 		UpdatedAt: time.Now(),
@@ -153,27 +147,17 @@ func (i *Issuer) StartEnrollment(ctx context.Context, id string) {
 // processEnrollment performs the ACME DNS-01 challenge for an enrollment.
 func (i *Issuer) processEnrollment(ctx context.Context, state *EnrollmentState) {
 	i.logger.Info("ENROLL: processEnrollment started", "id", state.ID)
-	// Get ACME account info — prefer embedded state, fall back to storage for old enrollments
-	acmeEmail := state.ACMEEmail
-	acmeKeyData := state.ACMEKeyPEM
-	if acmeEmail == "" || acmeKeyData == "" {
-		i.logger.Info("ENROLL: ACME info not in state, fetching from store", "id", state.ID, "acmeEmail", acmeEmail, "acmeKeyPEM", acmeKeyData)
-		acmeInfo, err := i.store.GetACMEAccount(ctx)
-		if err != nil {
-			i.logger.Info("ENROLL: failed to get ACME account", "id", state.ID, "err", err)
-			i.failEnrollment(ctx, state, fmt.Sprintf("failed to get ACME account: %v", err))
-			return
-		}
-		i.logger.Info("ENROLL: got ACME email", "id", state.ID, "email", acmeInfo.Email)
-		if acmeEmail == "" {
-			acmeEmail = acmeInfo.Email
-		}
-		if acmeKeyData == "" {
-			acmeKeyData = acmeInfo.Key
-		}
-	} else {
-		i.logger.Info("ENROLL: using embedded ACME info from state", "id", state.ID, "email", acmeEmail)
+
+	// Fetch the ACME account from storage (sealed config path)
+	acmeInfo, err := i.store.GetACMEAccount(ctx)
+	if err != nil {
+		i.logger.Info("ENROLL: failed to get ACME account", "id", state.ID, "err", err)
+		i.failEnrollment(ctx, state, fmt.Sprintf("failed to get ACME account: %v", err))
+		return
 	}
+	i.logger.Info("ENROLL: got ACME email", "id", state.ID, "email", acmeInfo.Email)
+	acmeEmail := acmeInfo.Email
+	acmeKeyData := acmeInfo.Key
 
 	// Parse ACME private key
 	keyLen := len(acmeKeyData)
@@ -226,7 +210,7 @@ func (i *Issuer) processEnrollment(ctx context.Context, state *EnrollmentState) 
 	}
 
 	// Create ACME client
-	acmeURL := state.ACMEURL
+	acmeURL := acmeInfo.URL
 	if acmeURL == "" {
 		acmeURL = DefaultACMEURL
 	}
@@ -281,33 +265,34 @@ func (i *Issuer) processEnrollment(ctx context.Context, state *EnrollmentState) 
 	user.SetRegistration(reg)
 	i.logger.Info("ENROLL:ACME registration done", "id", state.ID, "uri", uriStr)
 
-	// Update ACME key in state for future retrievals
-	state.ACMEKeyPEM = acmeKeyData
-
-	// Get the DNS provider for this enrollment
-	// The credentials map may not include the "provider" key or "zone", so add them
-	creds := make(map[string]interface{})
-	for k, v := range state.Credentials {
-		creds[k] = v
-	}
-	if state.Provider != "" {
-		creds["provider"] = state.Provider
-	}
-	// Pass the zone name so providers like Cloudflare can find the correct zone
-	if state.Zone != "" {
-		creds["zone"] = state.Zone
-	}
-	provider, err := i.registry.GetProvider(state.Provider, creds)
+	// Fetch the DNS role from storage
+	role, err := i.store.GetRole(ctx, state.RoleName)
 	if err != nil {
-		i.logger.Info("ENROLL:failed to get DNS provider", "id", state.ID, "err", err, "provider", state.Provider)
-		if state.Provider == "" {
-			i.failEnrollment(ctx, state, fmt.Sprintf("no matching role found for domain(s) %v — no DNS provider configured", state.Domains))
-		} else {
-			i.failEnrollment(ctx, state, fmt.Sprintf("failed to get DNS provider: %v", err))
-		}
+		i.logger.Info("ENROLL:failed to get role", "id", state.ID, "err", err)
+		i.failEnrollment(ctx, state, fmt.Sprintf("failed to get role %s: %v", state.RoleName, err))
 		return
 	}
-	i.logger.Info("ENROLL:got DNS provider", "id", state.ID, "provider", state.Provider)
+	if role == nil {
+		i.failEnrollment(ctx, state, fmt.Sprintf("role %s not found", state.RoleName))
+		return
+	}
+	i.logger.Info("ENROLL:got role", "id", state.ID, "provider", role.Provider, "zone", role.Zone)
+
+	// Get the DNS provider for this enrollment
+	creds := make(map[string]interface{})
+	for k, v := range role.Credentials {
+		creds[k] = v
+	}
+	// Pass provider and zone so providers like Cloudflare can resolve the correct zone
+	creds["provider"] = role.Provider
+	creds["zone"] = role.Zone
+	provider, err := i.registry.GetProvider(role.Provider, creds)
+	if err != nil {
+		i.logger.Info("ENROLL:failed to get DNS provider", "id", state.ID, "err", err, "provider", role.Provider)
+		i.failEnrollment(ctx, state, fmt.Sprintf("failed to get DNS provider: %v", err))
+		return
+	}
+	i.logger.Info("ENROLL:got DNS provider", "id", state.ID, "provider", role.Provider)
 
 	// Set up the DNS-01 challenge solver
 	challengeProvider := &dns01ProviderWrapper{provider: provider}
