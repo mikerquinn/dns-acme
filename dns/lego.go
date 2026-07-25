@@ -7,9 +7,15 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"sync"
 
 	legodns "github.com/go-acme/lego/v4/providers/dns"
 )
+
+// envMu serializes LegoProviderFactory.NewProvider calls so that the
+// os.Setenv → provider-creation → os.Unsetenv window cannot interleave.
+// Without this, concurrent enrollments can read each other's credentials.
+var envMu sync.Mutex
 
 // ListSupportedProviders returns a list of all DNS providers supported by lego.
 func ListSupportedProviders() []string {
@@ -154,6 +160,11 @@ func (f *LegoProviderFactory) NewProvider(config map[string]interface{}) (Provid
 			setKeys[upperK] = true
 		}
 	}
+
+	// Serialize the entire setenv→create→unsetenv window so that
+	// concurrent NewProvider calls cannot interleave their environment variables.
+	envMu.Lock()
+	defer envMu.Unlock()
 
 	// Set environment variables
 	for _, ev := range envVars {
