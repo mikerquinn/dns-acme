@@ -10,13 +10,13 @@ import (
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
 
-// toResponseData returns response data for a role, with sensitive credential values masked.
+// toResponseData returns response data for a role. Credentials are omitted
+// so sensitive values are never leaked in the API response.
 func toResponseData(r *storage.DNSRole) map[string]interface{} {
 	return map[string]interface{}{
-		"name":        r.Name,
-		"provider":    r.Provider,
-		"zone":        r.Zone,
-		"credentials": storage.MaskSensitiveCredentials(r.Credentials),
+		"name":     r.Name,
+		"provider": r.Provider,
+		"zone":     r.Zone,
 	}
 }
 

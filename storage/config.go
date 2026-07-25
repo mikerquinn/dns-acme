@@ -153,25 +153,4 @@ func (s *ConfigStorage) SetACMEAccount(ctx context.Context, account *ACMEAccount
 	return nil
 }
 
-// MaskSensitiveCredentials returns a copy of credentials with sensitive values masked.
-func MaskSensitiveCredentials(creds map[string]interface{}) map[string]interface{} {
-	sensitiveKeys := map[string]bool{
-		"key": true, "secret": true, "token": true, "password": true,
-		"api_key": true, "api_token": true, "access_key": true,
-		"secret_key": true, "private_key": true,
-		"dns_api_token": true, "access_token": true,
-	}
-	masked := make(map[string]interface{}, len(creds))
-	for k, v := range creds {
-		lower := strings.ToLower(k)
-		// Exact match or key ends with _TOKEN/_KEY/_SECRET/_PASSWORD
-		if sensitiveKeys[lower] || strings.HasSuffix(lower, "_token") ||
-			strings.HasSuffix(lower, "_key") || strings.HasSuffix(lower, "_secret") ||
-			strings.HasSuffix(lower, "_password") {
-			masked[k] = "***"
-		} else {
-			masked[k] = v
-		}
-	}
-	return masked
-}
+
