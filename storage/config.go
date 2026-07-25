@@ -109,16 +109,14 @@ func (s *ConfigStorage) GetACMEAccount(ctx context.Context) (*ACMEAccount, error
 		account.URI = string(uriData)
 	}
 
-	keyPrefix := account.Key[:min(30, len(account.Key))]
-	s.logger.Info("configStore.GetACMEAccount", "email", account.Email, "key_prefix", keyPrefix, "uri", account.URI)
+	s.logger.Info("configStore.GetACMEAccount", "email", account.Email, "uri", account.URI)
 	return &account, nil
 }
 
 // SetACMEAccount stores the ACME account configuration.
 func (s *ConfigStorage) SetACMEAccount(ctx context.Context, account *ACMEAccount) error {
 	if s.logger != nil {
-		keyPrefix := account.Key[:min(30, len(account.Key))]
-		s.logger.Info("configStore.SetACMEAccount", "email", account.Email, "key_prefix", keyPrefix, "uri", account.URI, "backend_type", fmt.Sprintf("%T", s.Backend()))
+		s.logger.Info("configStore.SetACMEAccount", "email", account.Email, "uri", account.URI, "backend_type", fmt.Sprintf("%T", s.Backend()))
 	}
 	s.logger.Info("configStore.SetACMEAccount: about to put email", "key", ConfigKeyACMEEmail, "backend_ptr", fmt.Sprintf("%p", s.Backend()))
 	if err := s.backend.Put(ctx, ConfigKeyACMEEmail, []byte(account.Email)); err != nil {

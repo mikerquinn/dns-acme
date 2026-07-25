@@ -60,7 +60,7 @@ func (p *Plugin) Init(ctx context.Context, backend storage.StorageBackend) {
 		p.acmeEmail = account.Email
 		p.acmeKeyPEM = account.Key
 		p.acmeURL = account.URL
-		p.logger.Info("loaded ACME account from storage", "key_prefix", account.Key[:min(50, len(account.Key))])
+		p.logger.Info("loaded ACME account from storage", "email", account.Email)
 		p.acmeURI = account.URI
 	} else {
 		p.logger.Error("failed to load ACME account from storage", "error", err)

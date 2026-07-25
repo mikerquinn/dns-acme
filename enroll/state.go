@@ -4,9 +4,7 @@ package enroll
 import (
 	"context"
 	"crypto"
-	"crypto/rsa"
 	"crypto/x509"
-	"encoding/base64"
 	"encoding/pem"
 	"fmt"
 	"net/http"
@@ -171,9 +169,7 @@ func (i *Issuer) processEnrollment(ctx context.Context, state *EnrollmentState) 
 	acmeKeyData := acmeInfo.Key
 
 	// Parse ACME private key
-	keyLen := len(acmeKeyData)
-	keyPrefix := acmeKeyData[:min(50, keyLen)]
-	i.logger.Info("ENROLL: got ACME key", "id", state.ID, "key_prefix", keyPrefix, "key_len", keyLen)
+	i.logger.Info("ENROLL: got ACME key", "id", state.ID, "key_len", len(acmeKeyData))
 
 	block, _ := pem.Decode([]byte(acmeKeyData))
 	if block == nil {
@@ -214,11 +210,7 @@ func (i *Issuer) processEnrollment(ctx context.Context, state *EnrollmentState) 
 		privateKey: privateKey,
 		reg:        nil,
 	}
-	// Log the public key's modulus (first 40 chars of base64) for debugging
-	if rsaPriv, ok := privateKey.(*rsa.PrivateKey); ok {
-		nPrefix := base64.StdEncoding.EncodeToString(rsaPriv.N.Bytes())
-		i.logger.Info("ENROLL:ACME key pub_n", "id", state.ID, "pub_n_prefix", nPrefix[:min(40, len(nPrefix))])
-	}
+
 
 	// Create ACME client
 	acmeURL := acmeInfo.URL
@@ -260,8 +252,7 @@ func (i *Issuer) processEnrollment(ctx context.Context, state *EnrollmentState) 
 		// Persist the new account so subsequent enrollments reuse it
 		key, _ := i.store.GetACMEKey(ctx)
 		uriStr = reg.URI
-		keyPrefix := key[:min(50, len(key))]
-		i.logger.Info("ENROLL:SetACMEAccount", "id", state.ID, "key_prefix", keyPrefix, "uri", uriStr)
+		i.logger.Info("ENROLL:SetACMEAccount", "id", state.ID, "uri", uriStr)
 		i.store.SetACMEAccount(ctx, &storage.ACMEAccount{
 			Email: user.GetEmail(),
 			Key:   key,
