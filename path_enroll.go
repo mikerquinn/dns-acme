@@ -143,7 +143,7 @@ func (b *dnsacmeBackend) pathEnroll(ctx context.Context, req *logical.Request, d
 		}
 	} else {
 		if b.logger != nil {
-			b.logger.Info("entity authorized", "entity_id", req.EntityID, "domains", csrInfo.Domains)
+			b.logger.Info("no entity; authorized by DNS role matching", "domains", csrInfo.Domains)
 		}
 	}
 
