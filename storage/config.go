@@ -171,11 +171,4 @@ func GetRole(ctx context.Context, backend StorageBackend, name string) (*DNSRole
 	return &role, nil
 }
 
-// SetRole stores a DNS role in storage.
-func SetRole(ctx context.Context, backend StorageBackend, name string, role *DNSRole) error {
-	data, err := json.Marshal(role)
-	if err != nil {
-		return fmt.Errorf("failed to marshal role: %w", err)
-	}
-	return backend.Put(ctx, ConfigKeyRoles+name, data)
-}
+

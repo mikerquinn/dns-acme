@@ -12,7 +12,6 @@ import (
 type CSRInfo struct {
 	Domains   []string
 	SubjectCN string
-	RawBytes  []byte
 }
 
 // ParseCSRFromString parses a PEM-encoded CSR and returns its information.
@@ -42,7 +41,6 @@ func ParseCSRFromString(csrPEM string) (*CSRInfo, error) {
 	return &CSRInfo{
 		Domains:   extractDomains(csr),
 		SubjectCN: csr.Subject.CommonName,
-		RawBytes:  []byte(csrPEM),
 	}, nil
 }
 

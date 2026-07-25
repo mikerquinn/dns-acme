@@ -10,6 +10,15 @@ import (
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
 
+// mapKeys returns a sorted list of keys from a map for deterministic logging.
+func mapKeys(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
 // toResponseData returns response data for a role. Credentials are omitted
 // so sensitive values are never leaked in the API response.
 func toResponseData(r *storage.DNSRole) map[string]interface{} {
@@ -151,6 +160,7 @@ func (b *dnsacmeBackend) pathRolesWrite(ctx context.Context, req *logical.Reques
 	role.Zone = zoneStr
 
 	// Collect credential fields from the raw data (skip known framework fields)
+	b.logger.Info("pathRolesWrite: raw data", "raw_keys", fmt.Sprintf("%v", mapKeys(d.Raw)))
 	credentials := make(map[string]interface{})
 	skipKeys := map[string]bool{
 		"name": true, "provider": true, "zone": true, "_": true,
