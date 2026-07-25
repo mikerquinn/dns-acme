@@ -113,7 +113,7 @@ func (f *LegoProviderFactory) NewProvider(config map[string]interface{}) (Provid
 		return nil, fmt.Errorf("config must contain 'provider' field with the lego DNS provider name")
 	}
 
-	// Collect env vars from config.
+	// Collect env vars from config, tracking which keys we set so we can skip duplicates.
 	// Config keys are converted to uppercase and used directly as env var names.
 	// No auto-prefixing — admins specify the exact env var names lego expects
 	// (e.g. "CLOUDFLARE_DNS_API_TOKEN", "AWS_ACCESS_KEY_ID").
@@ -122,13 +122,22 @@ func (f *LegoProviderFactory) NewProvider(config map[string]interface{}) (Provid
 		value string
 	}
 	var envVars []envPair
+	setKeys := make(map[string]bool) // Track which env var names have been set
 
 	// Set ZONE env var from the role's zone attribute if provided.
-	// Providers that need explicit zone identification (e.g. Route53 with AWS_HOSTED_ZONE_ID)
-	// will pick up the zone; others will ignore it.
+	// For Cloudflare, the provider looks up zones by name using the ZONE env var.
+	// For providers like Route53, the zone is the hosted zone ID.
 	if zone, ok := config["zone"].(string); ok && zone != "" {
 		envVars = append(envVars, envPair{"ZONE", zone})
 		envVars = append(envVars, envPair{strings.ToUpper(providerName) + "_ZONE", zone})
+		setKeys["ZONE"] = true
+		setKeys[strings.ToUpper(providerName)+"_ZONE"] = true
+		// For Cloudflare, also set ZONE_ID if the zone looks like a domain name
+		// (not a UUID-style ID), so the provider can resolve it.
+		if strings.ToUpper(providerName) == "CLOUDFLARE" && !strings.Contains(zone, "-") && len(zone) > 4 {
+			envVars = append(envVars, envPair{strings.ToUpper(providerName) + "_ZONE_ID", zone})
+			setKeys[strings.ToUpper(providerName)+"_ZONE_ID"] = true
+		}
 	}
 
 	for k, v := range config {
@@ -136,8 +145,19 @@ func (f *LegoProviderFactory) NewProvider(config map[string]interface{}) (Provid
 			continue
 		}
 		if strVal, ok := v.(string); ok && strVal != "" {
-			envVars = append(envVars, envPair{strings.ToUpper(k), strVal})
+			upperK := strings.ToUpper(k)
+			if setKeys[upperK] {
+				// Skip duplicate — the explicit ZONE handling above already set it.
+				continue
+			}
+			envVars = append(envVars, envPair{upperK, strVal})
+			setKeys[upperK] = true
 		}
+	}
+
+	// Set environment variables
+	for _, ev := range envVars {
+		os.Setenv(ev.key, ev.value)
 	}
 
 	// Create a cleanup function to unset env vars after provider creation
@@ -145,11 +165,6 @@ func (f *LegoProviderFactory) NewProvider(config map[string]interface{}) (Provid
 		for _, ev := range envVars {
 			os.Unsetenv(ev.key)
 		}
-	}
-
-	// Set environment variables
-	for _, ev := range envVars {
-		os.Setenv(ev.key, ev.value)
 	}
 
 	// Try to create the provider by name

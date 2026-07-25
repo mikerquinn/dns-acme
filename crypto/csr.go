@@ -19,7 +19,7 @@ type CSRInfo struct {
 func ParseCSRFromString(csrPEM string) (*CSRInfo, error) {
 	block, rest := pem.Decode([]byte(csrPEM))
 	if block == nil {
-		return nil, fmt.Errorf("failed to decode PEM block")
+		return nil, fmt.Errorf("failed to decode PEM block: no valid PEM data found")
 	}
 
 	// Handle multiple PEM blocks (some CSRs may have trailing data)
@@ -51,7 +51,7 @@ func ParseCSRFromString(csrPEM string) (*CSRInfo, error) {
 func ParseCSRAsX509(csrPEM string) (*x509.CertificateRequest, error) {
 	block, _ := pem.Decode([]byte(csrPEM))
 	if block == nil {
-		return nil, fmt.Errorf("failed to decode PEM block")
+		return nil, fmt.Errorf("failed to decode PEM block: no valid PEM data found")
 	}
 	return x509.ParseCertificateRequest(block.Bytes)
 }

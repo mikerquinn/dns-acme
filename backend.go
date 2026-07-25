@@ -126,7 +126,7 @@ func (b *dnsacmeBackend) pathConfigCreate(ctx context.Context, req *logical.Requ
 	b.acmeKeyPEM = acmeKeyPEM
 	b.acmeURL = acmeURLStr
 	b.acmeURI = reg.URI
-	b.logger.Info("pathConfigCreate: set in-memory state", "acmeKeyPEM_prefix", acmeKeyPEM[:50], "uri", reg.URI)
+	b.logger.Info("pathConfigCreate: set in-memory state", "acmeKeyPEM_prefix", acmeKeyPEM[:min(50, len(acmeKeyPEM))], "uri", reg.URI)
 
 	return &logical.Response{Data: map[string]interface{}{
 		"message": "ACME account created and registered",

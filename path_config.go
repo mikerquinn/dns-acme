@@ -3,20 +3,12 @@ package main
 import (
 	"context"
 	"crypto"
-	"fmt"
 
 	"github.com/go-acme/lego/v4/registration"
 	"github.com/openbao/openbao/sdk/v2/framework"
 	"github.com/openbao/openbao/sdk/v2/logical"
 
 	"github.com/mikerquinn/dns-acme/storage"
-)
-
-const (
-	configKeyACMEEmail = "config/acme_email"
-	configKeyACMEKey   = "config/acme_key"
-	configKeyACMEURL   = "config/acme_url"
-	configKeyRoles     = "config/role/"
 )
 
 const defaultACMEURL = "https://acme-v02.api.letsencrypt.org/directory"
@@ -79,18 +71,17 @@ func pathConfig(b *dnsacmeBackend) []*framework.Path {
 
 // pathConfigExistenceCheck verifies if the configuration exists.
 func (b *dnsacmeBackend) pathConfigExistenceCheck(ctx context.Context, req *logical.Request, data *framework.FieldData) (bool, error) {
-	keys, err := req.Storage.List(ctx, "config/")
-	if err != nil {
-		return false, fmt.Errorf("existence check failed: %w", err)
-	}
-	return len(keys) > 0, nil
+	// Check the primary ACME account keys directly rather than listing all config/
+	_, err1 := req.Storage.Get(ctx, storage.ConfigKeyACMEEmail)
+	_, err2 := req.Storage.Get(ctx, storage.ConfigKeyACMEKey)
+	return err1 == nil || err2 == nil, nil
 }
 
 // pathConfigRead reads the configuration and outputs non-sensitive information.
 func (b *dnsacmeBackend) pathConfigRead(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
 	email := b.acmeEmail
 	if email == "" {
-		entry, err := req.Storage.Get(ctx, configKeyACMEEmail)
+		entry, err := req.Storage.Get(ctx, storage.ConfigKeyACMEEmail)
 		if err == nil && entry != nil {
 			email = string(entry.Value)
 		}
@@ -101,7 +92,7 @@ func (b *dnsacmeBackend) pathConfigRead(ctx context.Context, req *logical.Reques
 
 	acmeURL := b.acmeURL
 	if acmeURL == "" {
-		entry, err := req.Storage.Get(ctx, configKeyACMEURL)
+		entry, err := req.Storage.Get(ctx, storage.ConfigKeyACMEURL)
 		if err == nil && entry != nil {
 			acmeURL = string(entry.Value)
 		}
@@ -174,31 +165,33 @@ func (b *dnsacmeBackend) pathConfigWrite(ctx context.Context, req *logical.Reque
 		return &logical.Response{Data: map[string]interface{}{"error": "failed to store ACME account: " + err.Error()}}, nil
 	}
 
+	// Reset client so next invocation picks up new config
+	b.reset()
+
 	// Update plugin in-memory state
 	b.acmeEmail = emailStr
 	b.acmeKeyPEM = keyStr
 	b.acmeURL = acmeURLStr
 	b.acmeURI = account.URI
+	b.logger.Info("pathConfigWrite: updated in-memory state", "email", emailStr, "keyLen", len(keyStr), "url", acmeURLStr)
 
-	// Reset client so next invocation picks up new config
-	b.reset()
-
-	return nil, nil
+	return &logical.Response{Data: map[string]interface{}{
+		"message": "ACME account configuration updated",
+		"email":   emailStr,
+	}}, nil
 }
 
 // pathConfigDelete removes the configuration.
 func (b *dnsacmeBackend) pathConfigDelete(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
-	if err := req.Storage.Delete(ctx, configKeyACMEEmail); err != nil {
-		return &logical.Response{Data: map[string]interface{}{"error": "failed to delete email: " + err.Error()}}, nil
+	if err := b.configStore.DeleteACMEAccount(ctx); err != nil {
+		return &logical.Response{Data: map[string]interface{}{"error": "failed to delete ACME account: " + err.Error()}}, nil
 	}
-	if err := req.Storage.Delete(ctx, configKeyACMEKey); err != nil {
-		return &logical.Response{Data: map[string]interface{}{"error": "failed to delete key: " + err.Error()}}, nil
-	}
-	req.Storage.Delete(ctx, configKeyACMEURL)
 
 	b.reset()
 
-	return nil, nil
+	return &logical.Response{Data: map[string]interface{}{
+		"message": "ACME account configuration deleted",
+	}}, nil
 }
 
 // pathConfigHelpSynopsis summarizes the help text for the configuration.

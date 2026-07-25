@@ -60,7 +60,7 @@ func (p *Plugin) Init(ctx context.Context, backend storage.StorageBackend) {
 		p.acmeEmail = account.Email
 		p.acmeKeyPEM = account.Key
 		p.acmeURL = account.URL
-		p.logger.Info("loaded ACME account from storage", "key_prefix", account.Key[:50])
+		p.logger.Info("loaded ACME account from storage", "key_prefix", account.Key[:min(50, len(account.Key))])
 		p.acmeURI = account.URI
 	} else {
 		p.logger.Error("failed to load ACME account from storage", "error", err)
@@ -80,6 +80,7 @@ func (p *Plugin) reset() {
 }
 
 // acmeClient builds a lego ACME client from stored configuration.
+// Returns an error if the ACME account is not configured or the key is invalid.
 func (p *Plugin) acmeClient(ctx context.Context) (*lego.Client, error) {
 	p.mu.RLock()
 	email := p.acmeEmail
@@ -91,11 +92,11 @@ func (p *Plugin) acmeClient(ctx context.Context) (*lego.Client, error) {
 	if email == "" || keyPEM == "" {
 		// Lazy load from config store
 		if p.configStore == nil {
-			return nil, nil
+			return nil, fmt.Errorf("ACME config store not initialized")
 		}
 		account, err := p.configStore.GetACMEAccount(ctx)
 		if err != nil {
-			return nil, nil
+			return nil, fmt.Errorf("failed to load ACME account: %w", err)
 		}
 		email = account.Email
 		keyPEM = account.Key
@@ -106,12 +107,12 @@ func (p *Plugin) acmeClient(ctx context.Context) (*lego.Client, error) {
 	}
 
 	if email == "" || keyPEM == "" {
-		return nil, nil
+		return nil, fmt.Errorf("ACME account not configured")
 	}
 
 	key, err := parseKey([]byte(keyPEM))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to parse ACME key: %w", err)
 	}
 
 	reg := &registration.Resource{URI: acmeURI}

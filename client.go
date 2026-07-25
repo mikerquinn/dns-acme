@@ -13,7 +13,7 @@ import (
 func parseKey(data []byte) (crypto.PrivateKey, error) {
 	block, _ := pem.Decode(data)
 	if block == nil {
-		return nil, fmt.Errorf("failed to decode PEM block")
+		return nil, fmt.Errorf("failed to decode PEM block: invalid or empty PEM data")
 	}
 	switch block.Type {
 	case "RSA PRIVATE KEY":

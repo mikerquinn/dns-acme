@@ -44,14 +44,15 @@ func pathRevoke(b *dnsacmeBackend) []*framework.Path {
 
 // pathRevoke revokes a certificate or cancels a pending enrollment.
 func (b *dnsacmeBackend) pathRevoke(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
-	certRaw, _ := d.Raw["certificate"].(string)
-	idRaw, _ := d.Raw["id"].(string)
-	b.logger.Info("REVOKE", "op", req.Operation, "cert_len", len(certRaw), "id", idRaw)
 	certStr, _ := d.GetOk("certificate")
 	id, _ := d.GetOk("id")
 
-	certStrStr, _ := certStr.(string)
-	idStr, _ := id.(string)
+	certStrStr, certOK := certStr.(string)
+	idStr, idOK := id.(string)
+
+	if b.logger != nil {
+		b.logger.Info("REVOKE", "op", req.Operation, "has_cert", certOK, "has_id", idOK)
+	}
 
 	// If enrollment ID is provided, cancel it
 	if idStr != "" {
@@ -85,10 +86,13 @@ func (b *dnsacmeBackend) pathRevoke(ctx context.Context, req *logical.Request, d
 		return &logical.Response{Data: map[string]interface{}{"error": "certificate or enrollment id is required"}}, nil
 	}
 
-	// Decode PEM and parse certificate in one step
+	// Decode PEM and parse certificate
 	block, _ := pem.Decode([]byte(certStrStr))
 	if block == nil {
 		return &logical.Response{Data: map[string]interface{}{"error": "failed to decode certificate PEM"}}, nil
+	}
+	if block.Type != "CERTIFICATE" {
+		return &logical.Response{Data: map[string]interface{}{"error": "expected PEM block type 'CERTIFICATE', got: " + block.Type}}, nil
 	}
 	certParsed, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {

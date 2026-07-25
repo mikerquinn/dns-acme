@@ -30,12 +30,19 @@ func (s *EnrollmentStorage) CreateEnrollment(ctx context.Context, state *Enrollm
 	if err != nil {
 		return fmt.Errorf("failed to marshal enrollment state: %w", err)
 	}
-	return s.backend.Put(ctx, key, data)
+	s.logger.Info("CreateEnrollment: about to put", "key", key, "configStore_ptr", fmt.Sprintf("%p", s.configStore))
+	err = s.backend.Put(ctx, key, data)
+	s.logger.Info("CreateEnrollment: put result", "key", key, "err", err)
+	// Verify
+	verify, err2 := s.backend.Get(ctx, key)
+	s.logger.Info("CreateEnrollment: verify", "key", key, "len", len(verify), "err", err2)
+	return err
 }
 
 // GetEnrollment retrieves an enrollment state from storage.
 func (s *EnrollmentStorage) GetEnrollment(ctx context.Context, id string) (*EnrollmentState, error) {
 	key := enrollmentPrefix + id
+	s.logger.Info("GetEnrollment: about to get", "key", key, "backend_ptr", fmt.Sprintf("%p", s.backend), "configStore_backend_ptr", fmt.Sprintf("%p", s.configStore.Backend()))
 	data, err := s.backend.Get(ctx, key)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get enrollment: %w", err)
@@ -61,6 +68,7 @@ func (s *EnrollmentStorage) UpdateEnrollment(ctx context.Context, state *Enrollm
 
 // GetACMEAccount retrieves the ACME account configuration.
 func (s *EnrollmentStorage) GetACMEAccount(ctx context.Context) (*storage.ACMEAccount, error) {
+	s.logger.Info("EnrollmentStorage.GetACMEAccount: delegating", "configStore_ptr", fmt.Sprintf("%p", s.configStore), "backend_ptr", fmt.Sprintf("%p", s.configStore.Backend()))
 	return s.configStore.GetACMEAccount(ctx)
 }
 

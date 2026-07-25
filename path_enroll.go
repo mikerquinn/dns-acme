@@ -11,6 +11,7 @@ import (
 
 	cryptoPkg "github.com/mikerquinn/dns-acme/crypto"
 	"github.com/mikerquinn/dns-acme/enroll"
+	"github.com/mikerquinn/dns-acme/storage"
 	"github.com/openbao/openbao/sdk/v2/framework"
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
@@ -83,6 +84,12 @@ func (b *dnsacmeBackend) pathEnroll(ctx context.Context, req *logical.Request, d
 		return &logical.Response{Data: map[string]interface{}{"error": "CSR is required"}}, nil
 	}
 
+	// Enforce a maximum CSR size to prevent memory issues (1MB limit)
+	const maxCSRSize = 1024 * 1024
+	if len(csrPEM) > maxCSRSize {
+		return &logical.Response{Data: map[string]interface{}{"error": "CSR exceeds maximum size (1MB)"}}, nil
+	}
+
 	acmeURLStr := b.acmeURL
 
 	// Try to base64 decode if the CSR looks like base64 (no PEM headers)
@@ -104,6 +111,7 @@ func (b *dnsacmeBackend) pathEnroll(ctx context.Context, req *logical.Request, d
 
 	// Resolve entity metadata from OpenBao (authoritative, set by admin).
 	// req.EntityID is populated by OpenBao from the token's entity.
+	// If no entity is present (e.g. root token), skip entity-based authorization.
 	var entityMetadata map[string]string
 	if req.EntityID != "" {
 		ent, err := b.System().EntityInfo(req.EntityID)
@@ -112,24 +120,29 @@ func (b *dnsacmeBackend) pathEnroll(ctx context.Context, req *logical.Request, d
 			if b.logger != nil {
 				b.logger.Info("resolved entity metadata", "entity_id", req.EntityID, "metadata", entityMetadata)
 			}
+		} else if b.logger != nil {
+			b.logger.Warn("failed to resolve entity info", "entity_id", req.EntityID, "error", err)
 		}
+	} else if b.logger != nil {
+		b.logger.Info("no entity ID on request, skipping entity authorization")
 	}
 
-	// Validate entity authorization — allowed_domains is required
-	if len(entityMetadata) == 0 {
-		return &logical.Response{Data: map[string]interface{}{"error": "entity metadata not found, ensure the entity has allowed_domains metadata"}}, nil
-	}
-	if allowedDomains, ok := entityMetadata["allowed_domains"]; !ok || allowedDomains == "" {
-		return &logical.Response{Data: map[string]interface{}{"error": "entity metadata missing allowed_domains"}}, nil
-	}
-	if err := b.validateEntityAuthorization(ctx, req, entityMetadata, csrInfo.Domains); err != nil {
-		return &logical.Response{Data: map[string]interface{}{"error": "entity not authorized: " + err.Error()}}, nil
+	// Validate entity authorization — allowed_domains is required for non-root tokens
+	if len(entityMetadata) > 0 {
+		if allowedDomains, ok := entityMetadata["allowed_domains"]; !ok || allowedDomains == "" {
+			return &logical.Response{Data: map[string]interface{}{"error": "entity metadata missing allowed_domains"}}, nil
+		}
+		if err := b.validateEntityAuthorization(ctx, req, entityMetadata, csrInfo.Domains); err != nil {
+			return &logical.Response{Data: map[string]interface{}{"error": "entity not authorized: " + err.Error()}}, nil
+		}
+	} else if b.logger != nil {
+		b.logger.Info("no entity metadata, skipping domain authorization (root or unauthenticated token)")
 	}
 
 	// Find matching role by checking if the domain falls within the role's zone
 	var matchedProvider string
 	var matchedCredentials map[string]interface{}
-	roles, err := req.Storage.List(ctx, configKeyRoles)
+	roles, err := req.Storage.List(ctx, storage.ConfigKeyRoles)
 	if err != nil {
 		return &logical.Response{Data: map[string]interface{}{"error": "failed to list roles: " + err.Error()}}, nil
 	}
@@ -162,13 +175,42 @@ func (b *dnsacmeBackend) pathEnroll(ctx context.Context, req *logical.Request, d
 	state := enroll.NewEnrollmentState(enrollmentID, csrPEMOut, csrInfo.Domains, acmeURLStr)
 	state.Provider = matchedProvider
 	state.Credentials = matchedCredentials
+	// Store the role's zone so it can be passed to the DNS provider factory
+	// (zone is stored separately from credentials in the role)
+	for _, roleName := range roles {
+		role, err := b.getRole(ctx, req.Storage, roleName)
+		if err != nil {
+			continue
+		}
+		if role.Provider == matchedProvider {
+			state.Zone = role.Zone
+			break
+		}
+	}
+
+	// Embed ACME account info in the enrollment state so the goroutine
+	// doesn't need to call GetACMEAccount from storage (which may fail
+	// because the gRPC storage view is request-scoped).
+	b.logger.Info("pathEnroll: embedding ACME info in state", "acmeEmail", b.acmeEmail, "acmeKeyPEM_len", len(b.acmeKeyPEM), "acmeURL", b.acmeURL)
+	state.ACMEEmail = b.acmeEmail
+	state.ACMEKeyPEM = b.acmeKeyPEM
+	if acmeURLStr == "" {
+		acmeURLStr = defaultACMEURL
+	}
+	state.ACMEURL = acmeURLStr
 
 	if err := b.enrollStore.CreateEnrollment(ctx, state); err != nil {
 		return &logical.Response{Data: map[string]interface{}{"error": "failed to create enrollment: " + err.Error()}}, nil
 	}
 
+	if b.logger != nil {
+		b.logger.Info("enrollment created", "id", enrollmentID, "domains", csrInfo.Domains)
+	}
+
 	if b.issuer == nil {
-		b.logger.Error("issuer is nil, enrollment will not be processed")
+		if b.logger != nil {
+			b.logger.Error("issuer is nil, enrollment will not be processed")
+		}
 	} else {
 		b.logger.Info("starting enrollment", "id", enrollmentID)
 		b.issuer.StartEnrollment(ctx, enrollmentID)
@@ -186,12 +228,13 @@ func (b *dnsacmeBackend) pathEnroll(ctx context.Context, req *logical.Request, d
 // pathEnrollRetrieve polls enrollment status.
 func (b *dnsacmeBackend) pathEnrollRetrieve(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
 	id, _ := d.GetOk("id")
-	idStr, ok := id.(string)
-	if !ok || idStr == "" {
+	idStr, idOK := id.(string)
+	if !idOK || idStr == "" {
 		// Try to get from path: enroll/retrieve/<id>
-		parts := strings.Split(req.Path, "/")
-		if len(parts) >= 4 {
-			idStr = parts[3]
+		// The path pattern is "enroll/retrieve/<id>", so parts[3] is the id.
+		parts := strings.Split(strings.TrimPrefix(req.Path, "/"), "/")
+		if len(parts) == 3 {
+			idStr = parts[2]
 		}
 	}
 
@@ -292,11 +335,17 @@ func zoneMatchesDomain(domain, zone string) bool {
 	return false
 }
 
-// generateID creates a random hex ID.
+// generateID creates a cryptographically random hex ID.
 func generateID() string {
 	bytes := make([]byte, 16)
-	if _, err := rand.Read(bytes); err == nil {
+	n, err := rand.Read(bytes)
+	if err == nil && n == 16 {
 		return hex.EncodeToString(bytes)
+	}
+	// Fallback: use crypto/rand reader for a single 8-byte value
+	var fallback [8]byte
+	if _, err := rand.Reader.Read(fallback[:]); err == nil {
+		return hex.EncodeToString(fallback[:])
 	}
 	return fmt.Sprintf("%d", time.Now().UnixNano())
 }

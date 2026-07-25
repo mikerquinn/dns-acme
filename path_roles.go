@@ -10,13 +10,13 @@ import (
 	"github.com/openbao/openbao/sdk/v2/logical"
 )
 
-// toResponseData returns response data for a role.
+// toResponseData returns response data for a role, with sensitive credential values masked.
 func toResponseData(r *storage.DNSRole) map[string]interface{} {
 	return map[string]interface{}{
 		"name":        r.Name,
 		"provider":    r.Provider,
 		"zone":        r.Zone,
-		"credentials": r.Credentials,
+		"credentials": storage.MaskSensitiveCredentials(r.Credentials),
 	}
 }
 
@@ -79,7 +79,7 @@ func pathConfigRoles(b *dnsacmeBackend) []*framework.Path {
 
 // pathRolesList returns a list of role names.
 func (b *dnsacmeBackend) pathRolesList(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
-	entries, err := req.Storage.List(ctx, configKeyRoles)
+	entries, err := req.Storage.List(ctx, storage.ConfigKeyRoles)
 	if err != nil {
 		return nil, fmt.Errorf("error listing roles: %w", err)
 	}
@@ -132,12 +132,12 @@ func (b *dnsacmeBackend) pathRolesWrite(ctx context.Context, req *logical.Reques
 		return &logical.Response{Data: map[string]interface{}{"error": "invalid provider: " + err.Error()}}, nil
 	}
 
+	createOperation := (req.Operation == logical.CreateOperation)
+
 	role, err := b.getRole(ctx, req.Storage, nameStr)
 	if err != nil {
 		return nil, err
 	}
-
-	createOperation := (req.Operation == logical.CreateOperation)
 
 	if role == nil {
 		role = &storage.DNSRole{}
@@ -152,11 +152,14 @@ func (b *dnsacmeBackend) pathRolesWrite(ctx context.Context, req *logical.Reques
 
 	// Collect credential fields from the raw data (skip known framework fields)
 	credentials := make(map[string]interface{})
+	skipKeys := map[string]bool{
+		"name": true, "provider": true, "zone": true, "_": true,
+		"_wrap_ttl": true, "wrap_info": true, "wrap_ttl": true, "token_lookup": true,
+		"token_policies": true, "token_no_default_policy": true,
+		"lease_options": true, "metadata": true, "data": true,
+	}
 	for k, v := range d.Raw {
-		switch k {
-		case "name", "provider", "zone", "_",
-			"_wrap_ttl", "wrap_info", "wrap_ttl", "token_lookup", "token_policies", "token_no_default_policy",
-			"lease_options", "metadata", "data":
+		if skipKeys[k] {
 			continue
 		}
 		credentials[k] = v
@@ -183,7 +186,7 @@ func (b *dnsacmeBackend) pathRolesDelete(ctx context.Context, req *logical.Reque
 		return &logical.Response{Data: map[string]interface{}{"error": "name is required"}}, nil
 	}
 
-	err := req.Storage.Delete(ctx, configKeyRoles+name.(string))
+	err := req.Storage.Delete(ctx, storage.ConfigKeyRoles+name.(string))
 	if err != nil {
 		return nil, fmt.Errorf("error deleting role: %w", err)
 	}
@@ -197,7 +200,7 @@ func (b *dnsacmeBackend) getRole(ctx context.Context, s logical.Storage, name st
 		return nil, fmt.Errorf("missing role name")
 	}
 
-	entry, err := s.Get(ctx, configKeyRoles+name)
+	entry, err := s.Get(ctx, storage.ConfigKeyRoles+name)
 	if err != nil {
 		return nil, err
 	}
@@ -215,7 +218,7 @@ func (b *dnsacmeBackend) getRole(ctx context.Context, s logical.Storage, name st
 
 // setRole adds or updates a role in storage.
 func setRole(ctx context.Context, s logical.Storage, name string, role *storage.DNSRole) error {
-	entry, err := logical.StorageEntryJSON(configKeyRoles+name, role)
+	entry, err := logical.StorageEntryJSON(storage.ConfigKeyRoles+name, role)
 	if err != nil {
 		return fmt.Errorf("failed to marshal role: %w", err)
 	}

@@ -22,21 +22,26 @@ import (
 	"github.com/mikerquinn/dns-acme/storage"
 )
 
-const defaultACMEURL = "https://acme-v02.api.letsencrypt.org/directory"
+// DefaultACMEURL is the Let's Encrypt production directory URL.
+const DefaultACMEURL = "https://acme-v02.api.letsencrypt.org/directory"
 
 // acmeUser implements registration.User so lego can manage the ACME account.
 type acmeUser struct {
-	email   string
+	email      string
 	privateKey crypto.PrivateKey
-	reg       *registration.Resource
+	reg        *registration.Resource
 }
 
-func (u *acmeUser) GetEmail() string        { return u.email }
-func (u *acmeUser) GetPrivateKey() crypto.PrivateKey { return u.privateKey }
-func (u *acmeUser) GetRegistration() *registration.Resource {
-	return u.reg
+func (u *acmeUser) GetEmail() string                          { return u.email }
+func (u *acmeUser) GetPrivateKey() crypto.PrivateKey          { return u.privateKey }
+func (u *acmeUser) GetRegistration() *registration.Resource   { return u.reg }
+func (u *acmeUser) SetRegistration(r *registration.Resource)  { u.reg = r }
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
-func (u *acmeUser) SetRegistration(r *registration.Resource) { u.reg = r }
 
 // EnrollmentState represents the state of a certificate enrollment.
 type EnrollmentState struct {
@@ -44,9 +49,11 @@ type EnrollmentState struct {
 	CSRPEM      string                 `json:"csr_pem"`
 	ACMEEmail   string                 `json:"acme_email,omitempty"`
 	ACMEURL     string                 `json:"acme_url,omitempty"`
+	ACMEKeyPEM  string                 `json:"acme_key_pem,omitempty"`
 	Domains     []string               `json:"domains"`
 	Provider    string                 `json:"provider"`
 	Credentials map[string]interface{} `json:"credentials,omitempty"`
+	Zone        string                 `json:"zone,omitempty"`
 	State       string                 `json:"state"` // pending, in_progress, completed, error
 	Certificate string                 `json:"certificate,omitempty"`
 	NotAfter    time.Time              `json:"not_after,omitempty"`
@@ -86,6 +93,9 @@ func NewIssuer(store *EnrollmentStorage, registry *dns.ProviderRegistry, logger 
 }
 
 // StartEnrollment starts processing a single enrollment asynchronously.
+// The enrollment will timeout after 10 minutes.
+const enrollmentTimeout = 10 * time.Minute
+
 func (i *Issuer) StartEnrollment(ctx context.Context, id string) {
 	i.mu.Lock()
 	if i.active[id] {
@@ -105,7 +115,10 @@ func (i *Issuer) StartEnrollment(ctx context.Context, id string) {
 
 		i.logger.Info("ENROLL: about to get enrollment", "id", id)
 
-		state, err := i.store.GetEnrollment(context.Background(), id)
+		// Use background context for storage reads — the request context may be cancelled
+		// by the time the goroutine executes.
+		enrollCtx := context.Background()
+		state, err := i.store.GetEnrollment(enrollCtx, id)
 		i.logger.Info("ENROLL: got enrollment", "id", id, "err", err)
 		if err != nil {
 			i.logger.Info("ENROLL: failed to get enrollment", "id", id, "err", err)
@@ -121,36 +134,51 @@ func (i *Issuer) StartEnrollment(ctx context.Context, id string) {
 		// Mark as in progress
 		state.State = "in_progress"
 		state.UpdatedAt = time.Now()
-		i.store.UpdateEnrollment(context.Background(), state)
+		i.logger.Info("ENROLL: about to update enrollment to in_progress", "id", id)
+		if err := i.store.UpdateEnrollment(enrollCtx, state); err != nil {
+			i.logger.Info("ENROLL: failed to update enrollment to in_progress", "id", id, "err", err)
+		} else {
+			i.logger.Info("ENROLL: updated enrollment to in_progress", "id", id)
+		}
 
-		i.processEnrollment(context.Background(), state)
+		// Use a background context (not request-scoped) with a timeout to prevent
+		// goroutine leaks on hung ACME operations, and so storage writes survive
+		// after the HTTP request ends.
+		enrollCtx, cancel := context.WithTimeout(context.Background(), enrollmentTimeout)
+		defer cancel()
+		i.processEnrollment(enrollCtx, state)
 	}()
 }
 
 // processEnrollment performs the ACME DNS-01 challenge for an enrollment.
 func (i *Issuer) processEnrollment(ctx context.Context, state *EnrollmentState) {
 	i.logger.Info("ENROLL: processEnrollment started", "id", state.ID)
-	// Get ACME account info
+	// Get ACME account info — prefer embedded state, fall back to storage for old enrollments
 	acmeEmail := state.ACMEEmail
-	if acmeEmail == "" {
-			acmeInfo, err := i.store.GetACMEAccount(ctx)
+	acmeKeyData := state.ACMEKeyPEM
+	if acmeEmail == "" || acmeKeyData == "" {
+		i.logger.Info("ENROLL: ACME info not in state, fetching from store", "id", state.ID, "acmeEmail", acmeEmail, "acmeKeyPEM", acmeKeyData)
+		acmeInfo, err := i.store.GetACMEAccount(ctx)
 		if err != nil {
 			i.logger.Info("ENROLL: failed to get ACME account", "id", state.ID, "err", err)
 			i.failEnrollment(ctx, state, fmt.Sprintf("failed to get ACME account: %v", err))
 			return
 		}
 		i.logger.Info("ENROLL: got ACME email", "id", state.ID, "email", acmeInfo.Email)
-		acmeEmail = acmeInfo.Email
+		if acmeEmail == "" {
+			acmeEmail = acmeInfo.Email
+		}
+		if acmeKeyData == "" {
+			acmeKeyData = acmeInfo.Key
+		}
+	} else {
+		i.logger.Info("ENROLL: using embedded ACME info from state", "id", state.ID, "email", acmeEmail)
 	}
 
 	// Parse ACME private key
-	acmeKeyData, err := i.store.GetACMEKey(ctx)
-	if err != nil {
-		i.logger.Info("ENROLL: failed to get ACME key", "id", state.ID, "err", err)
-		i.failEnrollment(ctx, state, fmt.Sprintf("failed to get ACME key: %v", err))
-		return
-	}
-	i.logger.Info("ENROLL: got ACME key", "id", state.ID, "key_prefix", acmeKeyData[:50], "key_len", len(acmeKeyData))
+	keyLen := len(acmeKeyData)
+	keyPrefix := acmeKeyData[:min(50, keyLen)]
+	i.logger.Info("ENROLL: got ACME key", "id", state.ID, "key_prefix", keyPrefix, "key_len", keyLen)
 
 	block, _ := pem.Decode([]byte(acmeKeyData))
 	if block == nil {
@@ -158,15 +186,32 @@ func (i *Issuer) processEnrollment(ctx context.Context, state *EnrollmentState) 
 		return
 	}
 
-	privateKey, err := x509.ParsePKCS8PrivateKey(block.Bytes)
-	if err != nil {
-		// Try PKCS1
-		key, parseErr := x509.ParsePKCS1PrivateKey(block.Bytes)
-		if parseErr != nil {
-			i.failEnrollment(ctx, state, fmt.Sprintf("failed to parse ACME key: %v", err))
+	var privateKey crypto.PrivateKey
+	switch block.Type {
+	case "RSA PRIVATE KEY":
+		key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
+		if err != nil {
+			i.failEnrollment(ctx, state, fmt.Sprintf("failed to parse PKCS1 RSA key: %v", err))
 			return
 		}
 		privateKey = key
+	case "EC PRIVATE KEY":
+		key, err := x509.ParseECPrivateKey(block.Bytes)
+		if err != nil {
+			i.failEnrollment(ctx, state, fmt.Sprintf("failed to parse EC private key: %v", err))
+			return
+		}
+		privateKey = key
+	case "PRIVATE KEY":
+		key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+		if err != nil {
+			i.failEnrollment(ctx, state, fmt.Sprintf("failed to parse PKCS8 private key: %v", err))
+			return
+		}
+		privateKey = key
+	default:
+		i.failEnrollment(ctx, state, fmt.Sprintf("unsupported ACME key type: %s", block.Type))
+		return
 	}
 
 	user := &acmeUser{
@@ -176,13 +221,14 @@ func (i *Issuer) processEnrollment(ctx context.Context, state *EnrollmentState) 
 	}
 	// Log the public key's modulus (first 40 chars of base64) for debugging
 	if rsaPriv, ok := privateKey.(*rsa.PrivateKey); ok {
-		i.logger.Info("ENROLL:ACME key pub_n", "id", state.ID, "pub_n_prefix", base64.StdEncoding.EncodeToString(rsaPriv.N.Bytes())[:40])
+		nPrefix := base64.StdEncoding.EncodeToString(rsaPriv.N.Bytes())
+		i.logger.Info("ENROLL:ACME key pub_n", "id", state.ID, "pub_n_prefix", nPrefix[:min(40, len(nPrefix))])
 	}
 
 	// Create ACME client
 	acmeURL := state.ACMEURL
 	if acmeURL == "" {
-		acmeURL = defaultACMEURL
+		acmeURL = DefaultACMEURL
 	}
 
 	config := lego.NewConfig(user)
@@ -197,9 +243,10 @@ func (i *Issuer) processEnrollment(ctx context.Context, state *EnrollmentState) 
 		return
 	}
 
-	// Load existing URI to preserve it
-	existing, _ := i.store.GetACMEAccount(ctx)
+	// Load existing URI to preserve it (from state first, then storage as fallback)
 	uriStr := ""
+	// Try storage for old enrollments that may not have embedded URI
+	existing, _ := i.store.GetACMEAccount(ctx)
 	if existing != nil {
 		uriStr = existing.URI
 	}
@@ -218,7 +265,8 @@ func (i *Issuer) processEnrollment(ctx context.Context, state *EnrollmentState) 
 		// Persist the new account so subsequent enrollments reuse it
 		key, _ := i.store.GetACMEKey(ctx)
 		uriStr = reg.URI
-		i.logger.Info("ENROLL:SetACMEAccount", "id", state.ID, "key_prefix", key[:50], "uri", uriStr)
+		keyPrefix := key[:min(50, len(key))]
+		i.logger.Info("ENROLL:SetACMEAccount", "id", state.ID, "key_prefix", keyPrefix, "uri", uriStr)
 		i.store.SetACMEAccount(ctx, &storage.ACMEAccount{
 			Email: user.GetEmail(),
 			Key:   key,
@@ -231,9 +279,13 @@ func (i *Issuer) processEnrollment(ctx context.Context, state *EnrollmentState) 
 	}
 	// Store registration for future use
 	user.SetRegistration(reg)
+	i.logger.Info("ENROLL:ACME registration done", "id", state.ID, "uri", uriStr)
+
+	// Update ACME key in state for future retrievals
+	state.ACMEKeyPEM = acmeKeyData
 
 	// Get the DNS provider for this enrollment
-	// The credentials map may not include the "provider" key, so add it
+	// The credentials map may not include the "provider" key or "zone", so add them
 	creds := make(map[string]interface{})
 	for k, v := range state.Credentials {
 		creds[k] = v
@@ -241,8 +293,13 @@ func (i *Issuer) processEnrollment(ctx context.Context, state *EnrollmentState) 
 	if state.Provider != "" {
 		creds["provider"] = state.Provider
 	}
+	// Pass the zone name so providers like Cloudflare can find the correct zone
+	if state.Zone != "" {
+		creds["zone"] = state.Zone
+	}
 	provider, err := i.registry.GetProvider(state.Provider, creds)
 	if err != nil {
+		i.logger.Info("ENROLL:failed to get DNS provider", "id", state.ID, "err", err, "provider", state.Provider)
 		if state.Provider == "" {
 			i.failEnrollment(ctx, state, fmt.Sprintf("no matching role found for domain(s) %v — no DNS provider configured", state.Domains))
 		} else {
@@ -250,13 +307,17 @@ func (i *Issuer) processEnrollment(ctx context.Context, state *EnrollmentState) 
 		}
 		return
 	}
+	i.logger.Info("ENROLL:got DNS provider", "id", state.ID, "provider", state.Provider)
 
 	// Set up the DNS-01 challenge solver
 	challengeProvider := &dns01ProviderWrapper{provider: provider}
+	i.logger.Info("ENROLL:setting DNS-01 provider", "id", state.ID)
 	if err := client.Challenge.SetDNS01Provider(challengeProvider); err != nil {
+		i.logger.Info("ENROLL:failed to set DNS-01 provider", "id", state.ID, "err", err)
 		i.failEnrollment(ctx, state, fmt.Sprintf("failed to set DNS-01 challenge provider: %v", err))
 		return
 	}
+	i.logger.Info("ENROLL:DNS-01 provider set", "id", state.ID)
 
 	// Parse the CSR - lego expects *x509.CertificateRequest
 	csr, err := crt.ParseCSRAsX509(state.CSRPEM)
@@ -264,16 +325,20 @@ func (i *Issuer) processEnrollment(ctx context.Context, state *EnrollmentState) 
 		i.failEnrollment(ctx, state, fmt.Sprintf("failed to parse CSR: %v", err))
 		return
 	}
+	i.logger.Info("ENROLL:CSR parsed", "id", state.ID, "domains", state.Domains)
 
 	// Obtain certificate using CSR
+	i.logger.Info("ENROLL:calling ObtainForCSR", "id", state.ID)
 	certRes, err := client.Certificate.ObtainForCSR(certificate.ObtainForCSRRequest{
 		CSR:    csr,
 		Bundle: true,
 	})
 	if err != nil {
+		i.logger.Info("ENROLL:ObtainForCSR failed", "id", state.ID, "error", fmt.Sprintf("%v", err))
 		i.failEnrollment(ctx, state, fmt.Sprintf("certificate issuance failed: %v", err))
 		return
 	}
+	i.logger.Info("ENROLL:ObtainForCSR succeeded", "id", state.ID, "cert_len", len(certRes.Certificate))
 
 	// certRes.Certificate is a PEM bundle (leaf + intermediates). Extract just the leaf.
 	leafBlock, rest := pem.Decode(certRes.Certificate)
@@ -314,10 +379,14 @@ type dns01ProviderWrapper struct {
 }
 
 func (w *dns01ProviderWrapper) Present(domain, token, keyAuth string) error {
+	log := hclog.New(&hclog.LoggerOptions{Name: "dns01_present", Level: hclog.Info, Output: hclog.DefaultOutput, JSONFormat: true})
+	log.Info("dns01 Present", "domain", domain, "token", token, "keyAuth", keyAuth)
 	// Pass domain as-is: lego's Cloudflare provider already calls GetChallengeInfo
 	// internally, which builds _acme-challenge.{domain}. Doubling it would produce
 	// _acme-challenge._acme-challenge.{domain}.
-	return w.provider.Present(context.Background(), domain, token, keyAuth)
+	err := w.provider.Present(context.Background(), domain, token, keyAuth)
+	log.Info("dns01 Present done", "domain", domain, "err", fmt.Sprintf("%v", err))
+	return err
 }
 
 func (w *dns01ProviderWrapper) CleanUp(domain, token, keyAuth string) error {
