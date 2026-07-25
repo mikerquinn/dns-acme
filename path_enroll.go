@@ -109,8 +109,6 @@ func (b *dnsacmeBackend) pathEnroll(ctx context.Context, req *logical.Request, d
 	}
 
 	// Resolve entity metadata from OpenBao (authoritative, set by admin).
-	// req.EntityID is populated by OpenBao from the token's entity.
-	// If no entity is present (e.g. root token), skip entity-based authorization.
 	var entityMetadata map[string]string
 	if req.EntityID != "" {
 		ent, err := b.System().EntityInfo(req.EntityID)
@@ -123,10 +121,16 @@ func (b *dnsacmeBackend) pathEnroll(ctx context.Context, req *logical.Request, d
 			b.logger.Warn("failed to resolve entity info", "entity_id", req.EntityID, "error", err)
 		}
 	} else if b.logger != nil {
-		b.logger.Info("no entity ID on request, skipping entity authorization")
+		b.logger.Info("no entity ID on request")
 	}
 
-	// Validate entity authorization — allowed_domains is required for non-root tokens
+	// --- Authorization phase ---
+	// Every enrollment must prove domain ownership. This is done by requiring
+	// every CSR domain to be covered by at least one DNS role's zone.
+	// If the token carries an entity with allowed_domains, that list is also
+	// enforced — a domain must satisfy BOTH checks (entity membership + role zone).
+
+	// Step 1: if an entity exists, validate allowed_domains
 	if len(entityMetadata) > 0 {
 		if allowedDomains, ok := entityMetadata["allowed_domains"]; !ok || allowedDomains == "" {
 			return &logical.Response{Data: map[string]interface{}{"error": "entity metadata missing allowed_domains"}}, nil
@@ -134,13 +138,18 @@ func (b *dnsacmeBackend) pathEnroll(ctx context.Context, req *logical.Request, d
 		if err := b.validateEntityAuthorization(ctx, req, entityMetadata, csrInfo.Domains); err != nil {
 			return &logical.Response{Data: map[string]interface{}{"error": "entity not authorized: " + err.Error()}}, nil
 		}
-	} else if b.logger != nil {
-		b.logger.Info("no entity metadata, skipping domain authorization (root or unauthenticated token)")
+		if b.logger != nil {
+			b.logger.Info("entity authorized", "entity_id", req.EntityID, "domains", csrInfo.Domains)
+		}
+	} else {
+		if b.logger != nil {
+			b.logger.Info("entity authorized", "entity_id", req.EntityID, "domains", csrInfo.Domains)
+		}
 	}
 
-	// Find matching role by checking if the domain falls within the role's zone.
-	// Collect all matching roles, then pick the one with the longest (most specific) zone
-	// so that overlapping zones resolve deterministically regardless of Storage.List order.
+	// Every domain in the CSR must be covered by at least one DNS role's zone.
+	// This is the explicit authorization gate: without a matching role, the
+	// token has no claim to the domain regardless of entity membership.
 	type candidate struct {
 		name string
 		zone string
@@ -173,7 +182,7 @@ func (b *dnsacmeBackend) pathEnroll(ctx context.Context, req *logical.Request, d
 		}}, nil
 	}
 
-	// Sort candidates by zone length descending; longest zone = most specific match wins.
+	// Step 3: pick the most specific role (longest zone) and use it
 	sort.Slice(candidates, func(i, j int) bool {
 		return len(candidates[i].zone) > len(candidates[j].zone)
 	})
