@@ -141,6 +141,17 @@ func (i *Issuer) StartEnrollment(ctx context.Context, id string) {
 		enrollCtx, cancel := context.WithTimeout(context.Background(), enrollmentTimeout)
 		defer cancel()
 		i.processEnrollment(enrollCtx, state)
+
+		// If the goroutine timed out or returned early without reaching a terminal
+		// state, mark it as "error" so the enrollment never gets stuck in
+		// "in_progress" forever.
+		if state.State == "in_progress" {
+			state.State = "error"
+			state.Error = fmt.Sprintf("enrollment timed out after %v", enrollmentTimeout)
+			state.UpdatedAt = time.Now()
+			// Use context.Background() so the update survives the timeout
+			i.store.UpdateEnrollment(context.Background(), state)
+		}
 	}()
 }
 
