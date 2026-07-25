@@ -41,6 +41,13 @@ func min(a, b int) int {
 	return b
 }
 
+// Terminal states whose records may be garbage-collected.
+var terminalStates = map[string]struct{}{
+	"completed": {},
+	"error":     {},
+	"cancelled": {},
+}
+
 // EnrollmentState represents the state of a certificate enrollment.
 type EnrollmentState struct {
 	ID          string                 `json:"id"`
@@ -72,21 +79,36 @@ type Issuer struct {
 	logger   hclog.Logger
 	mu       sync.Mutex
 	active   map[string]bool
+	allIDs   map[string]struct{} // all known enrollment IDs (active + completed)
+	muAll    sync.Mutex          // protects allIDs
+	done     chan struct{}       // signal cleanup goroutine to stop
 }
 
 // NewIssuer creates a new certificate issuer.
 func NewIssuer(store *EnrollmentStorage, registry *dns.ProviderRegistry, logger hclog.Logger) *Issuer {
-	return &Issuer{
+	i := &Issuer{
 		store:    store,
 		registry: registry,
 		logger:   logger,
 		active:   make(map[string]bool),
+		allIDs:   make(map[string]struct{}),
+		done:     make(chan struct{}),
 	}
+	go i.cleanupLoop()
+	return i
 }
 
-// StartEnrollment starts processing a single enrollment asynchronously.
-// The enrollment will timeout after 10 minutes.
+// enrollmentTimeout bounds how long an individual certificate issuance may run.
 const enrollmentTimeout = 10 * time.Minute
+
+// cleanupInterval is how often the cleanup goroutine runs.
+const cleanupInterval = 5 * time.Minute
+
+// cleanupTTL removes terminal-state enrollments older than this duration.
+const cleanupTTL = 10 * time.Minute
+
+// Stop shuts down the cleanup goroutine.
+func (i *Issuer) Stop() { close(i.done) }
 
 func (i *Issuer) StartEnrollment(ctx context.Context, id string) {
 	i.mu.Lock()
@@ -96,6 +118,11 @@ func (i *Issuer) StartEnrollment(ctx context.Context, id string) {
 	}
 	i.active[id] = true
 	i.mu.Unlock()
+
+	// Track all known IDs for cleanup
+	i.muAll.Lock()
+	i.allIDs[id] = struct{}{}
+	i.muAll.Unlock()
 
 	go func() {
 		defer func() {
@@ -137,19 +164,22 @@ func (i *Issuer) StartEnrollment(ctx context.Context, id string) {
 		// goroutine leaks on hung ACME operations, and so storage writes survive
 		// after the HTTP request ends.
 		enrollCtx, cancel := context.WithTimeout(context.Background(), enrollmentTimeout)
-		defer cancel()
+		// processEnrollment is deferred after cancel so it runs to completion
+		// before the timeout context is torn down.
+		defer func() {
+			cancel()
+			// If the goroutine returned without reaching a terminal state,
+			// mark it as "error" so the enrollment never gets stuck in
+			// "in_progress" forever.
+			if state.State == "in_progress" {
+				state.State = "error"
+				state.Error = fmt.Sprintf("enrollment timed out after %v", enrollmentTimeout)
+				state.UpdatedAt = time.Now()
+				// Use context.Background() so the update survives the timeout
+				i.store.UpdateEnrollment(context.Background(), state)
+			}
+		}()
 		i.processEnrollment(enrollCtx, state)
-
-		// If the goroutine timed out or returned early without reaching a terminal
-		// state, mark it as "error" so the enrollment never gets stuck in
-		// "in_progress" forever.
-		if state.State == "in_progress" {
-			state.State = "error"
-			state.Error = fmt.Sprintf("enrollment timed out after %v", enrollmentTimeout)
-			state.UpdatedAt = time.Now()
-			// Use context.Background() so the update survives the timeout
-			i.store.UpdateEnrollment(context.Background(), state)
-		}
 	}()
 }
 
@@ -378,6 +408,63 @@ func (w *dns01ProviderWrapper) Present(domain, token, keyAuth string) error {
 
 func (w *dns01ProviderWrapper) CleanUp(domain, token, keyAuth string) error {
 	return w.provider.CleanUp(context.Background(), domain, token, keyAuth)
+}
+
+// cleanupLoop periodically removes enrollment records that reached a terminal
+// state more than cleanupTTL ago, keeping storage from accumulating forever.
+func (i *Issuer) cleanupLoop() {
+	ticker := time.NewTicker(cleanupInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-i.done:
+			return
+		case <-ticker.C:
+			i.cleanup()
+		}
+	}
+}
+
+// cleanup iterates over all known enrollment IDs and deletes terminal-state
+// records older than cleanupTTL.  It tolerates storage errors so one bad tick
+// does not crash the background goroutine.
+func (i *Issuer) cleanup() {
+	ctx := context.Background()
+	cutoff := time.Now().Add(-cleanupTTL)
+
+	// Snapshot the known IDs under the lock, then drop it before doing I/O.
+	i.muAll.Lock()
+	ids := make([]string, 0, len(i.allIDs))
+	for id := range i.allIDs {
+		ids = append(ids, id)
+	}
+	i.muAll.Unlock()
+
+	for _, id := range ids {
+		state, err := i.store.GetEnrollment(ctx, id)
+		if err != nil {
+			// Storage no longer has this record — remove from tracking.
+			i.muAll.Lock()
+			delete(i.allIDs, id)
+			i.muAll.Unlock()
+			continue
+		}
+		if _, isTerminal := terminalStates[state.State]; !isTerminal {
+			continue
+		}
+		if state.UpdatedAt.Before(cutoff) {
+			key := enrollmentPrefix + id
+			age := time.Since(state.UpdatedAt).Round(time.Minute)
+			if err := i.store.backend.Delete(ctx, key); err != nil {
+				i.logger.Warn("cleanup: failed to delete enrollment", "id", id, "err", err)
+			} else {
+				i.logger.Info("cleanup: removed enrollment", "id", id, "state", state.State, "age_seconds", int64(age.Seconds()))
+				i.muAll.Lock()
+				delete(i.allIDs, id)
+				i.muAll.Unlock()
+			}
+		}
+	}
 }
 
 
